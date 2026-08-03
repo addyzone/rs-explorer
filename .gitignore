@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Wiki tile fetch cache (scratch input for tools/stitch_wiki_tiles.py)
+tools/wiki_cache/
+
+# Wiki-style build intermediates, ~109 MB. Both rebuild from the fetch,
+# stitch and pad pipeline in tools/README.md, and only the tiles under maps/
+# are served. sources/runescape-surface.png IS committed: everything else is
+# aligned against it and it can't be regenerated.
+sources/runescape-surface-wiki-native.png
+sources/runescape-surface-wiki-final.png
+
+# AI assistant / editor tooling
+.claude/
+.cursor/
+.aider*
+.github/copilot-instructions.md
+CLAUDE.md
+AGENTS.md
+.continue/
+.windsurfrules
+.clinerules

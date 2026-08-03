@@ -1,0 +1,729 @@
+/* RS Wiki Explorer Map. Dark chrome floating over the canvas: no docked bars,
+   every control is a small card on the map, so the map is the whole page. */
+
+:root {
+  --bg: #0f1116;
+  --ink: #f2ede1;
+  --ink-dim: #b9b2a3;
+  --panel: rgba(20, 23, 30, 0.92);
+  --panel-brd: rgba(255, 255, 255, 0.10);
+  --gold: #ffd34d;
+  --accent: #7fd1ff;
+  --danger: #ff6b6b;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  --radius: 12px;
+  --panel-w: 320px; /* user-resizable, see .panel-resize-handle + main.js */
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Wiki chrome reskin: close to the RS Wiki's own look, applied while the
+   wiki3d style is active (config.js styles[].chrome). It only overrides the
+   custom properties above, so one block retints everything. This is the light
+   variant; the prefers-color-scheme block at the end of the file swaps in the
+   wiki's dark palette. */
+body.style-wiki3d {
+  --panel: rgba(255, 255, 255, 0.94);
+  --panel-brd: rgba(54, 65, 79, 0.14);
+  --ink: #36414f;
+  --ink-dim: #6b7684;
+  --gold: #2373a2;
+  --accent: #2373a2;
+  --danger: #d43d3d;
+  --shadow: 0 4px 18px rgba(54, 65, 79, 0.2);
+  --radius: 6px;
+  font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+}
+body.style-wiki3d kbd { background: rgba(54, 65, 79, 0.08); }
+body.style-wiki3d .wiki-thumb-wrap { background: rgba(54, 65, 79, 0.08); }
+body.style-wiki3d .btn.active,
+body.style-wiki3d .pill-btn.active { color: #ffffff; }
+
+* { box-sizing: border-box; }
+
+/* Inline SVG icons (js/icons.js). Sized in em so the same markup works in a
+   42px button or after 9px disclaimer text, and filled with currentColor so
+   they follow the surrounding text across all three themes. */
+.icon {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  flex: none;
+  vertical-align: -0.15em;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  user-select: none;
+}
+
+#map {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  cursor: grab;
+  touch-action: none; /* the canvas handles pinch itself, see viewer.js */
+}
+#map:active { cursor: grabbing; }
+
+/* ---- Shared floating pill button ---- */
+.pill-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--panel-brd);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+/* Author CSS beats the browser's own [hidden] rule regardless of specificity,
+   so display:flex above would keep #exportBtn visible outside editor mode. */
+.pill-btn[hidden] { display: none; }
+.pill-btn:hover { background: rgba(40, 45, 56, 0.95); }
+.pill-btn.active {
+  background: var(--gold);
+  color: #1a1400;
+  border-color: var(--gold);
+}
+/* Unsaved edits. The Save button is the only thing that knows there's work in
+   memory that isn't on disk. */
+.pill-btn.dirty {
+  background: var(--gold);
+  color: #1a1400;
+  border-color: var(--gold);
+}
+.pill-btn.dirty:hover { filter: brightness(1.06); background: var(--gold); }
+body.style-wiki3d .pill-btn:hover { background: rgba(35, 115, 162, 0.08); }
+
+/* Map switcher: the <select> itself dressed as a pill, rather than a button
+   that opens a panel that holds a select. The platform dropdown handles
+   keyboard and touch for free. Chevron is a background SVG since
+   appearance:none removes the native one. */
+.map-select {
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 42vw;
+  background-color: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--panel-brd);
+  border-radius: 999px;
+  padding: 9px 30px 9px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+  text-overflow: ellipsis;
+  transition: background-color 0.15s, border-color 0.15s;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23b9b2a3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  background-size: 11px;
+}
+.map-select:hover { background-color: rgba(40, 45, 56, 0.95); }
+body.style-wiki3d .map-select:hover { background-color: rgba(35, 115, 162, 0.08); }
+/* The popup list is drawn by the OS and won't inherit the translucent fill. */
+.map-select option { background: #171a21; color: var(--ink); }
+body.style-wiki3d .map-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%236b7684' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+body.style-wiki3d .map-select option { background: #ffffff; color: #36414f; }
+
+/* ---- Top left: style picker ----
+   Its own control, not an entry in a menu, because switching style changes the
+   whole map's look. Shows a card for every style except the active one, i.e.
+   what you'd switch to. Each card floats separately so it reads as a button. */
+.style-picker {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 9;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: calc(100vw - 28px);
+}
+.style-picker[hidden] { display: none; }
+.style-card {
+  width: 84px;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  transition: outline-color 0.15s, transform 0.15s;
+  backdrop-filter: blur(6px);
+}
+.style-card:hover { outline-color: var(--accent); transform: translateY(-2px); }
+.style-card img {
+  display: block;
+  width: 100%;
+  height: 52px;
+  object-fit: cover;
+}
+.style-card-label {
+  padding: 4px 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--ink);
+}
+
+/* ---- Top right: map switcher, editor badge, save, info ---- */
+.controls-topright {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: calc(100vw - 28px);
+}
+.editor-badge {
+  display: none;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1a1400;
+  background: var(--gold);
+  border-radius: 999px;
+  padding: 8px 12px;
+}
+.editor-mode .editor-badge { display: inline-block; }
+
+.info-wrap { position: relative; }
+.icon-btn {
+  width: 38px; height: 38px;
+  display: grid;
+  place-items: center;
+  background: var(--panel);
+  color: var(--ink-dim);
+  border: 1px solid var(--panel-brd);
+  border-radius: 50%;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+}
+.icon-btn:hover { color: var(--gold); }
+body.style-wiki3d .icon-btn:hover { color: var(--accent); }
+
+/* Info popover. Also where the app name and description live, since the header
+   is just controls now. */
+.info-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 290px;
+  max-width: 340px;
+  background: var(--panel);
+  border: 1px solid var(--panel-brd);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  z-index: 11;
+  display: grid;
+  gap: 12px;
+  backdrop-filter: blur(6px);
+}
+.info-panel[hidden] { display: none; }
+.info-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gold);
+}
+.info-blurb {
+  margin: -4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.info-rows {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-brd);
+}
+.info-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-dim); }
+/* Editor shortcuts stay hidden until editor mode is on. */
+.info-row.editor-only { display: none; }
+.editor-mode .info-row.editor-only { display: flex; }
+.info-keys { flex: none; min-width: 88px; color: var(--ink); font-size: 11px; }
+.info-contact {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-brd);
+}
+.info-contact:hover { text-decoration: underline; }
+kbd {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-brd);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: inherit;
+  font-size: 10px;
+}
+
+/* ---- Side panel ----
+   .panel is the frame: background, border, size, positioning context.
+   .panel-body is the only part that scrolls and the only part whose contents
+   get replaced. That split lets .panel-resize-handle sit inside the panel and
+   span top:0 to bottom:0, matching its height with no JS. */
+.panel {
+  position: fixed;
+  top: 68px;
+  right: 14px;
+  width: var(--panel-w);
+  max-height: calc(100vh - 100px);
+  display: flex;
+  background: var(--panel);
+  border: 1px solid var(--panel-brd);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 8;
+  backdrop-filter: blur(6px);
+}
+.panel-body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 18px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--panel-brd) transparent;
+}
+.panel-body::-webkit-scrollbar { width: 8px; }
+.panel-body::-webkit-scrollbar-track { background: transparent; }
+.panel-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.panel-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); background-clip: padding-box; }
+body.style-wiki3d .panel-body::-webkit-scrollbar-thumb { background: rgba(54, 65, 79, 0.25); background-clip: padding-box; }
+body.style-wiki3d .panel-body::-webkit-scrollbar-thumb:hover { background: rgba(54, 65, 79, 0.4); background-clip: padding-box; }
+
+/* Resize handle. A child spanning the panel's full height, so it never offers
+   to resize from empty map beside a short panel. The grip is a notched pill in
+   panel colours, centred on the edge, with a wider invisible hitbox. */
+.panel-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -7px; /* straddles the panel's left edge */
+  width: 14px;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.panel-resize-handle > span {
+  width: 6px;
+  height: 40px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--panel-brd);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+  transition: border-color 0.15s, height 0.15s;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--ink-dim) 0 1px,
+    transparent 1px 4px
+  );
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 2px 11px;
+}
+.panel-resize-handle:hover > span,
+.panel-resize-handle.dragging > span {
+  border-color: var(--accent);
+  height: 56px;
+}
+.panel.empty { color: var(--ink-dim); }
+.panel-hint { font-size: 13px; line-height: 1.5; }
+
+.label-head { margin-bottom: 8px; }
+.panel h2 { margin: 0; font-size: 20px; line-height: 1.2; }
+.label-tier { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-dim); margin-top: 2px; }
+.coord-line { font-size: 12px; color: var(--ink-dim); margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+/* Wiki sidebar content */
+.wiki-close {
+  position: absolute;
+  top: 10px; right: 10px;
+  width: 26px; height: 26px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--ink-dim);
+  border: none;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+  z-index: 2;
+}
+.wiki-close:hover { color: var(--ink); background: rgba(255, 255, 255, 0.08); }
+body.style-wiki3d .wiki-close:hover { background: rgba(54, 65, 79, 0.08); }
+.author-mode-panel .wiki-box { margin-top: 12px; border-top: 1px solid var(--panel-brd); padding-top: 12px; }
+
+.wiki-title-wrap { padding-right: 22px; margin-bottom: 12px; }
+.wiki-title { margin: 0; font-size: 19px; line-height: 1.25; color: var(--ink); }
+/* The infobox examine line, an italic subtitle under the title. The negative
+   margin collapses against the title's own margin-bottom to pull it in close
+   (4px gap) while keeping a full 12px before the thumbnail. When there's no
+   examine text the empty placeholder has no margin, so the title's 12px
+   collapses straight through. */
+.wiki-examine { margin: -8px 0 12px; font-style: italic; font-size: 12.5px; line-height: 1.4; color: var(--ink-dim); }
+
+/* Infobox images vary wildly in aspect ratio (wide skyline vs tall NPC render)
+   with no way to know which in advance. height:auto plus a cap shows most at
+   their natural ratio; object-fit:contain only kicks in for the rare image
+   that hits the cap. Never cover, which cut heads off portrait renders.
+   The wrapper owns the background and radius so a transparent cutout render
+   can get .cutout padding without the image needing a border. */
+.wiki-thumb-wrap {
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+.wiki-thumb-wrap.cutout { padding: 20px; }
+.wiki-thumb {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Scales with the panel. A flat 320px cap meant widening the panel stopped
+     helping partway. Still bounded by viewport height. */
+  max-height: min(46vh, 460px);
+  object-fit: contain;
+}
+.wiki-extract { font-size: 13.5px; line-height: 1.55; color: #e6e0d2; margin: 0 0 12px; }
+body.style-wiki3d .wiki-extract { color: var(--ink); }
+.wiki-link {
+  display: inline-block; font-size: 13px; font-weight: 700;
+  color: #1a1400; text-decoration: none;
+  background: var(--gold);
+  padding: 8px 14px;
+  border-radius: 999px;
+  margin-bottom: 4px;
+}
+.wiki-link:hover { filter: brightness(1.08); }
+body.style-wiki3d .wiki-link { color: #ffffff; background: var(--accent); }
+.wiki-loading, .wiki-empty { font-size: 13px; color: var(--ink-dim); }
+.wiki-empty a { color: var(--accent); }
+.wiki-license { font-size: 10.5px; line-height: 1.5; color: var(--ink-dim); opacity: 0.75; margin: 14px 0 0; }
+.wiki-license a { color: inherit; }
+
+/* Categories */
+.wiki-cats { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--panel-brd); }
+.wiki-subhead {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ink-dim);
+  margin: 0 0 8px;
+}
+.wiki-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wiki-chip {
+  font-size: 11px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--panel-brd);
+  border-radius: 999px;
+  padding: 4px 10px;
+  text-decoration: none;
+}
+.wiki-chip:hover { border-color: var(--accent); color: var(--accent); }
+body.style-wiki3d .wiki-chip { background: rgba(54, 65, 79, 0.05); }
+
+/* Section quick nav */
+.wiki-sections { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--panel-brd); }
+.wiki-section-list { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
+.wiki-section-list a { font-size: 12.5px; color: var(--accent); text-decoration: none; }
+.wiki-section-list a:hover { text-decoration: underline; }
+
+/* Related pages. Wraps like the section list so 5 or 6 suggestions take one or
+   two lines rather than a screenful. */
+.wiki-related { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--panel-brd); }
+.wiki-related-list { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
+.wiki-related-list a { font-size: 12.5px; color: var(--accent); text-decoration: none; }
+.wiki-related-list a:hover { text-decoration: underline; }
+
+/* Author fields */
+.fld { display: block; font-size: 12px; color: var(--ink-dim); margin-bottom: 10px; }
+.fld-hint { color: rgba(185, 178, 163, 0.6); font-weight: 400; }
+.fld input, .fld select, .fld textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  background: rgba(10, 12, 16, 0.7);
+  color: var(--ink);
+  border: 1px solid var(--panel-brd);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+.row { display: flex; gap: 8px; }
+.row .btn {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--panel-brd);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.row .btn:hover { background: rgba(40, 45, 56, 0.95); }
+.row .btn.danger { border-color: rgba(255, 107, 107, 0.5); color: var(--danger); }
+.row .btn.danger:hover { background: rgba(255, 107, 107, 0.15); }
+
+/* ---- Zoom and view controls ---- */
+.controls {
+  position: fixed;
+  right: 14px;
+  bottom: 20px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.zoom-readout {
+  min-width: 44px;
+  text-align: center;
+  padding: 3px 6px;
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  background: var(--panel);
+  border: 1px solid var(--panel-brd);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-variant-numeric: tabular-nums;
+}
+.zoom-group {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--panel-brd);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.zoom-group .ctl {
+  box-shadow: none;
+  border-radius: 0;
+  border: none;
+}
+.zoom-group .ctl:first-child { border-bottom: 1px solid var(--panel-brd); }
+.ctl {
+  width: 42px; height: 42px;
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--panel-brd);
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.ctl:hover { background: rgba(40, 45, 56, 0.95); }
+body.style-wiki3d .ctl:hover,
+body.style-wiki3d .pill-btn:hover { background: rgba(35, 115, 162, 0.08); }
+
+/* Fan content notice, styled the way Leaflet and Google Maps style tile
+   attribution: flush in the corner, plain text, no card. The required notice
+   shouldn't read as more official than it is. Hidden in editor mode.
+   width:fit-content is what keeps it on one line: normal block sizing fills
+   the viewport width and wraps to three or four lines it doesn't need. */
+.disclaimer-bar {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  z-index: 5;
+  width: fit-content;
+  max-width: min(94vw, 900px);
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 0 6px 0 0;
+  font-size: 9px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.85);
+}
+/* Nudge up a little once there's room, without turning it into a headline. */
+@media (min-width: 900px) {
+  .disclaimer-bar { font-size: 10px; padding: 3px 8px; max-width: min(94vw, 1100px); }
+}
+@media (min-width: 1600px) {
+  .disclaimer-bar { font-size: 11px; padding: 3px 10px; max-width: min(94vw, 1300px); }
+}
+.editor-mode .disclaimer-bar { display: none; }
+/* Tile credit is about a different party than the Jagex notice, so it gets its
+   own line rather than running the two into one sentence. */
+.disclaimer-attribution {
+  display: block;
+  margin-top: 1px;
+}
+.disclaimer-attribution[hidden] { display: none; }
+.disclaimer-attribution a,
+.disclaimer-cta { color: inherit; text-decoration: underline; font-weight: inherit; font-size: inherit; }
+
+/* ---- Editor HUD ----
+   No background of its own, so it costs nothing visually outside editor mode.
+   The right edge stops at 74px so hud-status's margin-left:auto doesn't push it
+   under the zoom column in the same corner. */
+.hud {
+  position: fixed;
+  left: 0; right: 74px; bottom: 20px;
+  z-index: 6;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 14px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.hud-coords, .hud-status { display: none; }
+.editor-mode .hud-coords, .editor-mode .hud-status { display: inline; }
+.hud-coords { color: var(--accent); min-width: 90px; background: var(--panel); border-radius: 6px; padding: 3px 8px; }
+.hud-status { margin-left: auto; background: var(--panel); border-radius: 6px; padding: 3px 8px; }
+
+/* ---- Editor quick add menu ----
+   Appears at the click point (positioned in JS). Pick a tier and the label
+   exists immediately, selected, with its name field focused. */
+.tier-quick-menu {
+  position: fixed;
+  z-index: 12;
+  min-width: 152px;
+  background: var(--panel);
+  border: 1px solid var(--panel-brd);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+}
+.tier-quick-menu[hidden] { display: none; }
+.tier-quick-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+.tier-quick-item:hover { background: rgba(255, 255, 255, 0.08); }
+body.style-wiki3d .tier-quick-item:hover { background: rgba(54, 65, 79, 0.08); }
+.tier-quick-swatch { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+
+/* ---- Narrow screens ----
+   The docked sidebar doesn't work here. At this width it either eats most of
+   the map or gets squeezed to a column too narrow to read, and it sat there
+   taking up room even with nothing selected. So it becomes a sheet that slides
+   over everything, and only exists while a label is open. */
+@media (max-width: 640px) {
+  .panel.empty { display: none; }
+  .panel {
+    inset: auto 0 0 0;
+    width: auto;
+    max-height: 78vh;
+    border-radius: 16px 16px 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    z-index: 20;
+  }
+  /* Dim the map behind the sheet. Taps on the backdrop hit .panel itself,
+     since pseudo elements forward hits to their host, and main.js closes on
+     a click whose target is the frame rather than the content. */
+  .panel::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: -1;
+  }
+  /* Sheet grabber. Decorative: dragging isn't wired up, but it signals which
+     edge the sheet is anchored to. */
+  .panel::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--panel-brd);
+    transform: translateX(-50%);
+  }
+  .panel-body { padding: 24px 18px calc(18px + env(safe-area-inset-bottom, 0px)); }
+  .panel-resize-handle { display: none; }
+  .map-select { max-width: 44vw; }
+  .info-panel { width: calc(100vw - 28px); max-width: none; }
+}
+
+/* Wiki dark variant, following the OS preference with no in-app toggle. Last
+   in the file on purpose: several rules it overrides are also
+   body.style-wiki3d scoped at equal specificity, and ties break on source
+   order, so it has to come after them. */
+@media (prefers-color-scheme: dark) {
+  body.style-wiki3d {
+    --panel: rgba(27, 31, 38, 0.94);
+    --panel-brd: rgba(255, 255, 255, 0.12);
+    --ink: #e8ecf1;
+    --ink-dim: #96a1ae;
+    --gold: #6fb3f2;
+    --accent: #6fb3f2;
+    --danger: #ff8a8a;
+    --shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+  }
+  body.style-wiki3d kbd { background: rgba(255, 255, 255, 0.08); }
+  body.style-wiki3d .wiki-thumb-wrap { background: rgba(0, 0, 0, 0.3); }
+  body.style-wiki3d .pill-btn:hover,
+  body.style-wiki3d .ctl:hover,
+  body.style-wiki3d .icon-btn:hover { background: rgba(111, 179, 242, 0.14); }
+  body.style-wiki3d .panel-body::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); background-clip: padding-box; }
+  body.style-wiki3d .panel-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); background-clip: padding-box; }
+  body.style-wiki3d .panel-body { scrollbar-color: rgba(255, 255, 255, 0.2) transparent; }
+}

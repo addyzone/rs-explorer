@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Wiki source pad/align tool</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+  #c { display: block; width: 100vw; height: 100vh; cursor: grab; }
+  #c:active { cursor: grabbing; }
+  #hud {
+    position: fixed; top: 10px; left: 10px; z-index: 10; width: 380px;
+    background: rgba(18,18,18,0.92); border: 1px solid #444; border-radius: 8px;
+    padding: 10px 14px; font-size: 13px; line-height: 1.55;
+  }
+  #hud b { color: #ffd34d; }
+  .row { display: flex; justify-content: space-between; gap: 10px; }
+  .row span:last-child { font-variant-numeric: tabular-nums; }
+  #hud button { background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+  #hud button.active { background: #ffd34d; color: #111; border-color: #ffd34d; }
+  .modes { display: flex; gap: 4px; margin: 6px 0; flex-wrap: wrap; }
+  input[type=number] { width: 108px; background: #000; color: #ffd34d; border: 1px solid #555; border-radius: 4px; padding: 2px 5px; font: inherit; font-variant-numeric: tabular-nums; }
+  hr { border: 0; border-top: 1px solid #383838; margin: 8px 0; }
+  .pads { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; text-align: center; margin: 4px 0; }
+  .pads div span { display: block; font-variant-numeric: tabular-nums; font-size: 15px; color: #7fd1ff; }
+  .pads div.neg span { color: #ff6b6b; }
+  .pads div small { color: #999; }
+  #cmd { font-family: ui-monospace, monospace; font-size: 10.5px; background: #000; padding: 6px; border-radius: 4px; margin-top: 6px; word-break: break-all; user-select: all; color: #b7e37f; }
+  .hint { color: #9aa; font-size: 11.5px; }
+  #pickStatus { color: #7fd1ff; font-size: 11.5px; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div><b>Pad / align the wiki source</b></div>
+  <div class="hint">Pads the wiki image with ocean so it lands exactly on the
+    original, scaled up by <i>ratio</i>. Neither image is ever resampled.</div>
+  <hr>
+  <div class="row"><span>Ratio (wiki px per orig px)</span>
+    <input id="ratio" type="number" step="0.0000001" value="1.3333333"></div>
+  <div class="row"><span>Offset X / Y (target px)</span><span id="offXY">-</span></div>
+  <div class="row"><span>Target canvas</span><span id="canv">-</span></div>
+  <hr>
+  <div><b>Pad with ocean</b> (target px)</div>
+  <div class="pads">
+    <div id="padL"><small>left</small><span>-</span></div>
+    <div id="padT"><small>top</small><span>-</span></div>
+    <div id="padR"><small>right</small><span>-</span></div>
+    <div id="padB"><small>bottom</small><span>-</span></div>
+  </div>
+  <div class="modes">
+    <button data-mode="orig" class="active">1 orig</button>
+    <button data-mode="wiki">2 wiki</button>
+    <button data-mode="blend">3 blend</button>
+    <button data-mode="diff">4 diff</button>
+  </div>
+  <div class="hint">Arrows nudge 1px · +Shift 10 · +Ctrl 100 &nbsp;|&nbsp; [ / ] blend opacity<br>
+    Drag pan · wheel zoom · <b>0</b> jump to wiki · <b>H</b> fit original<br>
+    <b>Shift+click</b> a landmark in mode 1, then the same one in mode 2,
+    the offset snaps to match. <b>Esc</b> clears.</div>
+  <div id="pickStatus"></div>
+  <div id="cmd"></div>
+</div>
+<script>
+// Full-resolution dimensions of the REAL images. The two PNGs loaded below are
+// downscaled viewing copies (browsers cap decodable pixel area), written by
+//     python tools/align_wiki.py previews
+// Every number this tool reports is in true full-res target pixels, so the
+// preview downscale never leaks into the answer.
+const qs = new URLSearchParams(location.search);
+const num = (k, d) => parseFloat(qs.get(k) ?? d);
+const ORIG_W = num("origW", 21982), ORIG_H = num("origH", 18101);
+const WIKI_W = num("wikiW", 11520), WIKI_H = num("wikiH", 12800);
+const origUrl = qs.get("orig") || "preview-orig.png";
+const wikiUrl = qs.get("wiki") || "preview-wiki.png";
+
+let RATIO = num("ratio", 1.3333333);   // target px per orig px
+let offX = num("x", 0), offY = num("y", 0);  // wiki paste offset, target px
+
+const ratioInput = document.getElementById("ratio");
+ratioInput.value = RATIO;
+ratioInput.addEventListener("input", () => {
+  const v = parseFloat(ratioInput.value);
+  if (v > 0) { RATIO = v; render(); }
+});
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let mode = "orig", blendAlpha = 0.5;
+
+const orig = new Image(), wiki = new Image();
+let loaded = 0;
+orig.onload = wiki.onload = () => { if (++loaded === 2) { fitOrig(); render(); } };
+orig.onerror = wiki.onerror = (e) =>
+  document.getElementById("hud").insertAdjacentHTML("beforeend",
+    `<div style="color:#ff6b6b">Failed to load ${e.target.src}</div>`);
+orig.src = origUrl; wiki.src = wikiUrl;
+
+// View state: world space == ORIGINAL map pixels. viewScale = css px per world px.
+let viewScale = 0.05, viewCX = 0, viewCY = 0;
+const targetW = () => Math.round(ORIG_W * RATIO);
+const targetH = () => Math.round(ORIG_H * RATIO);
+// The wiki image occupies WIKI_W x WIKI_H TARGET px, placed at (offX, offY)
+// in target space, so convert both to world space to draw over the original.
+const wikiWorld = () => ({
+  x: offX / RATIO, y: offY / RATIO,
+  w: WIKI_W / RATIO, h: WIKI_H / RATIO,
+});
+
+function resize() {
+  canvas.width = innerWidth; canvas.height = innerHeight;
+  // The first fit can land while the pane still has zero size, which leaves
+  // viewScale at 0 and paints nothing, so re-fit whenever it isn't usable.
+  if (!(viewScale > 0) || !isFinite(viewScale)) fitOrig();
+  render();
+}
+addEventListener("resize", resize);
+
+function fitOrig() {
+  viewCX = ORIG_W / 2; viewCY = ORIG_H / 2;
+  const w = canvas.width || innerWidth || 1200, h = canvas.height || innerHeight || 800;
+  viewScale = Math.min(w / ORIG_W, h / ORIG_H) * 0.95;
+}
+function jumpToWiki() {
+  const w = wikiWorld();
+  viewCX = w.x + w.w / 2; viewCY = w.y + w.h / 2;
+  viewScale = Math.min(innerWidth / w.w, innerHeight / w.h) * 0.9;
+  render();
+}
+
+const toDevX = (wx) => (wx - viewCX) * viewScale + canvas.width / 2;
+const toDevY = (wy) => (wy - viewCY) * viewScale + canvas.height / 2;
+const toWorldX = (sx) => (sx - canvas.width / 2) / viewScale + viewCX;
+const toWorldY = (sy) => (sy - canvas.height / 2) / viewScale + viewCY;
+
+let pickOrig = null, pickWiki = null;
+const setStatus = (m) => { document.getElementById("pickStatus").textContent = m || ""; };
+function tryResolvePick() {
+  if (!pickOrig || !pickWiki) return;
+  // Both picks are world coords; the correction is in target px.
+  offX += (pickOrig.x - pickWiki.x) * RATIO;
+  offY += (pickOrig.y - pickWiki.y) * RATIO;
+  offX = Math.round(offX); offY = Math.round(offY);
+  pickOrig = pickWiki = null;
+  setMode("blend");
+  setStatus("Snapped to your two picks. Check the blend, refine with arrows.");
+}
+
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#22242c";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+
+  const drawOrig = () =>
+    ctx.drawImage(orig, toDevX(0), toDevY(0), ORIG_W * viewScale, ORIG_H * viewScale);
+  const drawWiki = () => {
+    const w = wikiWorld();
+    ctx.drawImage(wiki, toDevX(w.x), toDevY(w.y), w.w * viewScale, w.h * viewScale);
+  };
+
+  if (mode === "orig") drawOrig();
+  else if (mode === "wiki") drawWiki();
+  else if (mode === "blend") { drawOrig(); ctx.globalAlpha = blendAlpha; drawWiki(); ctx.globalAlpha = 1; }
+  else { drawOrig(); ctx.globalCompositeOperation = "difference"; drawWiki(); ctx.globalCompositeOperation = "source-over"; }
+
+  // Outline of the target canvas == the original's own extent in world space.
+  ctx.strokeStyle = "#ffd34d"; ctx.lineWidth = 1;
+  ctx.strokeRect(toDevX(0), toDevY(0), ORIG_W * viewScale, ORIG_H * viewScale);
+
+  const mark = (p, col) => {
+    if (!p) return;
+    const x = toDevX(p.x), y = toDevY(p.y);
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - 12, y); ctx.lineTo(x + 12, y);
+    ctx.moveTo(x, y - 12); ctx.lineTo(x, y + 12);
+    ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.stroke();
+  };
+  mark(pickOrig, "#ff6b6b"); mark(pickWiki, "#7fd1ff");
+
+  updateHud();
+}
+
+function updateHud() {
+  const TW = targetW(), TH = targetH();
+  const pads = { padL: offX, padT: offY, padR: TW - WIKI_W - offX, padB: TH - WIKI_H - offY };
+  for (const [id, v] of Object.entries(pads)) {
+    const el = document.getElementById(id);
+    el.querySelector("span").textContent = Math.round(v);
+    el.classList.toggle("neg", v < 0);
+  }
+  document.getElementById("offXY").textContent = `${Math.round(offX)}, ${Math.round(offY)}`;
+  document.getElementById("canv").textContent = `${TW} x ${TH}`;
+  document.getElementById("cmd").textContent =
+    `python tools/place_wiki_source.py sources/runescape-surface-wiki-native.png ` +
+    `sources/runescape-surface-wiki-final.png --scale 1.0 --out-size ${TW}x${TH} ` +
+    `--x ${Math.round(offX)} --y ${Math.round(offY)} --blend-color 119,137,165`;
+}
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll("#hud button[data-mode]")
+    .forEach((b) => b.classList.toggle("active", b.dataset.mode === m));
+  render();
+}
+document.querySelectorAll("#hud button[data-mode]")
+  .forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  const step = e.ctrlKey ? 100 : e.shiftKey ? 10 : 1;
+  let handled = true;
+  if (e.key === "ArrowLeft") offX -= step;
+  else if (e.key === "ArrowRight") offX += step;
+  else if (e.key === "ArrowUp") offY -= step;
+  else if (e.key === "ArrowDown") offY += step;
+  else if ("1234".includes(e.key)) { setMode({ 1: "orig", 2: "wiki", 3: "blend", 4: "diff" }[e.key]); return; }
+  else if (e.key === "[") blendAlpha = Math.max(0, blendAlpha - 0.05);
+  else if (e.key === "]") blendAlpha = Math.min(1, blendAlpha + 0.05);
+  else if (e.key === "0") { jumpToWiki(); return; }
+  else if (e.key === "h" || e.key === "H") { fitOrig(); }
+  else if (e.key === "Escape") { pickOrig = pickWiki = null; setStatus("Picks cleared."); }
+  else handled = false;
+  if (handled) { e.preventDefault(); render(); }
+});
+
+let dragging = false, lastX = 0, lastY = 0, downX = 0, downY = 0, downShift = false, moved = false;
+canvas.addEventListener("pointerdown", (e) => {
+  dragging = true; lastX = downX = e.clientX; lastY = downY = e.clientY;
+  downShift = e.shiftKey; moved = false;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointerup", (e) => {
+  dragging = false;
+  if (!downShift || moved) return;
+  if (mode !== "orig" && mode !== "wiki") {
+    setStatus("Switch to mode 1 or 2 first; blend and diff are ambiguous to pick in.");
+    return;
+  }
+  const p = { x: toWorldX(e.clientX), y: toWorldY(e.clientY) };
+  if (mode === "orig") { pickOrig = p; setStatus("Original point set. Now mode 2, same landmark."); }
+  else { pickWiki = p; setStatus("Wiki point set."); }
+  tryResolvePick();
+  render();
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
+  if (downShift) return;
+  viewCX -= (e.clientX - lastX) / viewScale;
+  viewCY -= (e.clientY - lastY) / viewScale;
+  lastX = e.clientX; lastY = e.clientY;
+  render();
+});
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const wx = toWorldX(e.clientX), wy = toWorldY(e.clientY);
+  viewScale *= e.deltaY < 0 ? 1.2 : 1 / 1.2;
+  viewCX = wx - (e.clientX - canvas.width / 2) / viewScale;
+  viewCY = wy - (e.clientY - canvas.height / 2) / viewScale;
+  render();
+}, { passive: false });
+
+resize();
+</script>
+</body>
+</html>

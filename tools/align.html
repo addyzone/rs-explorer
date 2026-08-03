@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Alt-style alignment tool</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+  #c { display: block; width: 100vw; height: 100vh; cursor: grab; }
+  #c:active { cursor: grabbing; }
+  #hud {
+    position: fixed; top: 10px; left: 10px; z-index: 10;
+    background: rgba(20,20,20,0.88); border: 1px solid #444; border-radius: 8px;
+    padding: 10px 14px; font-size: 13px; line-height: 1.6; min-width: 320px;
+  }
+  #hud b { color: #ffd34d; }
+  #hud .row { display: flex; justify-content: space-between; gap: 12px; }
+  #hud button { background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+  #hud button.active { background: #ffd34d; color: #111; border-color: #ffd34d; }
+  #hud .modes { display: flex; gap: 4px; margin: 6px 0; flex-wrap: wrap; }
+  #snippet { font-family: monospace; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; margin-top: 6px; word-break: break-all; user-select: all; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div><b>Alt-style alignment tool</b></div>
+  <div class="row"><span>Offset (world px)</span><span id="offXY">-</span></div>
+  <div class="row"><span>Scale (native px/world px)</span><span id="scaleVal">-</span></div>
+  <div class="modes">
+    <button data-mode="orig" class="active">1 orig only</button>
+    <button data-mode="wiki">2 wiki only</button>
+    <button data-mode="blend">3 blend 50/50</button>
+    <button data-mode="diff">4 difference</button>
+  </div>
+  <div>Arrows: nudge 1px &nbsp; +Shift: 10px &nbsp; +Ctrl: 100px</div>
+  <div>Drag: pan view &nbsp; Wheel: zoom view &nbsp; [ / ]: blend opacity</div>
+  <div><b>0</b>: jump view to wiki content &nbsp; <b>Home</b>: jump to orig center</div>
+  <div><b>Shift+click</b> a landmark in mode 1, then the same landmark in
+    mode 2, and the offset jumps to match. <b>Esc</b> clears a pending pick.</div>
+  <div id="pickStatus" style="color:#7fd1ff"></div>
+  <div id="snippet"></div>
+</div>
+<script>
+// Query params: orig=<url> wiki=<url> scale=<num> x=<num> y=<num> previewScale=<num>
+// previewScale: the wiki image at `wiki` url is a downsized-by-this-factor
+// copy of the true native tiles (browsers cap decodable image pixel area,
+// which the full native stitch can exceed). Used only to scale the
+// on-screen drawing; the reported offset/place snippet is still in true
+// world-px terms, unaffected.
+const qs = new URLSearchParams(location.search);
+const origUrl = qs.get("orig") || "../sources/runescape-surface.png";
+const wikiUrl = qs.get("wiki") || "../sources/runescape-surface-wiki-native.png";
+const SCALE = parseFloat(qs.get("scale") || "1.3333333333333333"); // 4/3: wiki zoom-2 (4px/tile) vs game (3px/tile)
+const PREVIEW_SCALE = parseFloat(qs.get("previewScale") || "1"); // native zoom-2 stitch is small enough to load directly
+const EFF_SCALE = SCALE / PREVIEW_SCALE;
+let offX = parseFloat(qs.get("x") || "0");
+let offY = parseFloat(qs.get("y") || "0");
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let mode = "orig";
+let blendAlpha = 0.5;
+
+const orig = new Image();
+const wiki = new Image();
+let loaded = 0;
+function onLoad() { if (++loaded === 2) { fitView(); render(); } }
+function onError(e) { document.getElementById("hud").innerHTML += `<div style="color:#ff6b6b">Failed to load: ${e.target.src}</div>`; }
+orig.onload = onLoad; wiki.onload = onLoad;
+orig.onerror = onError; wiki.onerror = onError;
+orig.src = origUrl; wiki.src = wikiUrl;
+
+// View state: viewScale = CSS px per WORLD px; viewCX/CY = world coord at canvas center.
+let viewScale = 0.05, viewCX = 0, viewCY = 0;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  render();
+}
+window.addEventListener("resize", resize);
+
+function fitView() {
+  viewCX = orig.width / 2;
+  viewCY = orig.height / 2;
+  viewScale = Math.min(window.innerWidth / orig.width, window.innerHeight / orig.height) * 0.95;
+}
+
+function worldToDevX(wx) { return (wx - viewCX) * viewScale + canvas.width / 2; }
+function worldToDevY(wy) { return (wy - viewCY) * viewScale + canvas.height / 2; }
+function devToWorldX(sx) { return (sx - canvas.width / 2) / viewScale + viewCX; }
+function devToWorldY(sy) { return (sy - canvas.height / 2) / viewScale + viewCY; }
+
+function wikiWorldSize() { return { w: wiki.width / EFF_SCALE, h: wiki.height / EFF_SCALE }; }
+function jumpToWiki() {
+  const { w, h } = wikiWorldSize();
+  viewCX = offX + w / 2;
+  viewCY = offY + h / 2;
+  viewScale = Math.min(window.innerWidth / w, window.innerHeight / h) * 0.9;
+  render();
+}
+
+// Click-to-register: shift+click a landmark in "orig only" mode, then the
+// same landmark in "wiki only" mode, and the offset jumps so that point lines
+// up, instead of nudging across a potentially huge distance by hand.
+let pickOrig = null, pickWiki = null;
+function setPickStatus(msg) { document.getElementById("pickStatus").textContent = msg || ""; }
+function tryResolvePick() {
+  if (pickOrig && pickWiki) {
+    offX += pickOrig.x - pickWiki.x;
+    offY += pickOrig.y - pickWiki.y;
+    pickOrig = null; pickWiki = null;
+    mode = "blend";
+    document.querySelectorAll("#hud button[data-mode]").forEach((x) => x.classList.toggle("active", x.dataset.mode === mode));
+    setPickStatus("Offset updated from your two picks. Check the blend, refine with arrows if needed.");
+    render();
+  }
+}
+
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#334"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+
+  const drawOrig = () => {
+    const x0 = worldToDevX(0), y0 = worldToDevY(0);
+    ctx.drawImage(orig, x0, y0, orig.width * viewScale, orig.height * viewScale);
+  };
+  const drawWiki = () => {
+    // wiki image is EFF_SCALE (preview-adjusted) px per world px; placed at (offX, offY).
+    const wWorldW = wiki.width / EFF_SCALE, wWorldH = wiki.height / EFF_SCALE;
+    const x0 = worldToDevX(offX), y0 = worldToDevY(offY);
+    ctx.drawImage(wiki, x0, y0, wWorldW * viewScale, wWorldH * viewScale);
+  };
+
+  if (mode === "orig") { drawOrig(); }
+  else if (mode === "wiki") { drawWiki(); }
+  else if (mode === "blend") { drawOrig(); ctx.globalAlpha = blendAlpha; drawWiki(); ctx.globalAlpha = 1; }
+  else if (mode === "diff") {
+    drawOrig();
+    ctx.globalCompositeOperation = "difference";
+    drawWiki();
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  // Pick markers (crosshairs) for the click-to-register flow.
+  const drawMark = (wx, wy, color) => {
+    const x = worldToDevX(wx), y = worldToDevY(wy);
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - 12, y); ctx.lineTo(x + 12, y);
+    ctx.moveTo(x, y - 12); ctx.lineTo(x, y + 12);
+    ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.stroke();
+  };
+  if (pickOrig) drawMark(pickOrig.x, pickOrig.y, "#ff6b6b");
+  if (pickWiki) drawMark(pickWiki.x, pickWiki.y, "#7fd1ff");
+
+  document.getElementById("offXY").textContent = `x=${offX.toFixed(1)}, y=${offY.toFixed(1)}`;
+  document.getElementById("scaleVal").textContent = SCALE.toFixed(6);
+  document.getElementById("snippet").textContent =
+    `place: { scale: ${SCALE}, x: ${Math.round(offX)}, y: ${Math.round(offY)} },`;
+}
+
+document.querySelectorAll("#hud button[data-mode]").forEach((b) => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#hud button[data-mode]").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    mode = b.dataset.mode;
+    render();
+  });
+});
+
+window.addEventListener("keydown", (e) => {
+  const step = e.ctrlKey ? 100 : e.shiftKey ? 10 : 1;
+  let handled = true;
+  if (e.key === "ArrowLeft") offX -= step;
+  else if (e.key === "ArrowRight") offX += step;
+  else if (e.key === "ArrowUp") offY -= step;
+  else if (e.key === "ArrowDown") offY += step;
+  else if (e.key === "1") mode = "orig";
+  else if (e.key === "2") mode = "wiki";
+  else if (e.key === "3") mode = "blend";
+  else if (e.key === "4") mode = "diff";
+  else if (e.key === "[") blendAlpha = Math.max(0, blendAlpha - 0.05);
+  else if (e.key === "]") blendAlpha = Math.min(1, blendAlpha + 0.05);
+  else if (e.key === "0") { jumpToWiki(); return; }
+  else if (e.key === "Home") { viewCX = orig.width / 2; viewCY = orig.height / 2; }
+  else if (e.key === "Escape") { pickOrig = null; pickWiki = null; setPickStatus("Picks cleared."); }
+  else handled = false;
+  if (handled) {
+    e.preventDefault();
+    document.querySelectorAll("#hud button[data-mode]").forEach((x) =>
+      x.classList.toggle("active", x.dataset.mode === mode)
+    );
+    render();
+  }
+});
+
+let dragging = false, lastX = 0, lastY = 0, downX = 0, downY = 0, downShift = false, moved = false;
+canvas.addEventListener("pointerdown", (e) => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  downX = e.clientX; downY = e.clientY; downShift = e.shiftKey; moved = false;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointerup", (e) => {
+  dragging = false;
+  if (downShift && !moved) {
+    if (mode !== "orig" && mode !== "wiki") {
+      setPickStatus("Switch to mode 1 or 2 before shift+clicking a landmark (blend/diff are ambiguous).");
+      return;
+    }
+    const w = { x: devToWorldX(e.clientX), y: devToWorldY(e.clientY) };
+    if (mode === "orig") { pickOrig = w; setPickStatus("Orig point set. Now switch to mode 2 (wiki) and shift+click the same landmark."); }
+    else { pickWiki = w; setPickStatus("Wiki point set."); }
+    tryResolvePick();
+    render();
+  }
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
+  if (downShift) return; // shift-drag doesn't pan, so a shift+click isn't fighting a pan
+  viewCX -= (e.clientX - lastX) / viewScale;
+  viewCY -= (e.clientY - lastY) / viewScale;
+  lastX = e.clientX; lastY = e.clientY;
+  render();
+});
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const wx = viewCX + (e.clientX - canvas.width / 2) / viewScale;
+  const wy = viewCY + (e.clientY - canvas.height / 2) / viewScale;
+  viewScale *= e.deltaY < 0 ? 1.2 : 1 / 1.2;
+  viewCX = wx - (e.clientX - canvas.width / 2) / viewScale;
+  viewCY = wy - (e.clientY - canvas.height / 2) / viewScale;
+  render();
+}, { passive: false });
+
+resize();
+</script>
+</body>
+</html>
