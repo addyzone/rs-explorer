@@ -159,8 +159,11 @@ function applyStyle(styleDef) {
   if (labels) labels.setStyleProfile(styleDef.labelStyle);
 }
 
-async function loadJson(url) {
-  const res = await fetch(url);
+// `revalidate` forces a conditional request (If-Modified-Since/ETag) instead
+// of trusting a cached copy, so a visitor still gets a 304 and no re-download
+// when labels.json hasn't actually changed, but never a stale one when it has.
+async function loadJson(url, { revalidate = false } = {}) {
+  const res = await fetch(url, revalidate ? { cache: "no-cache" } : undefined);
   if (!res.ok) throw new Error(`${url} → ${res.status}`);
   return res.json();
 }
@@ -575,7 +578,7 @@ async function loadMap(mapCfg, restore = {}) {
   };
 
   try {
-    const data = await loadJson(`${mapCfg.dir}/${MAP_FILES.labels}`);
+    const data = await loadJson(`${mapCfg.dir}/${MAP_FILES.labels}`, { revalidate: true });
     labels.load(data.labels || []);
   } catch (e) {
     labels.load([]);
