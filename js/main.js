@@ -1,10 +1,8 @@
-// main.js: wires the viewer, label layer and UI together.
-
-import { MAPS, MAP_FILES, LABEL_TIERS, TIER_ORDER } from "./config.js";
+import { MAPS, MAP_FILES, LABEL_TIERS, TIER_ORDER, DEFAULT_TIER } from "./config.js";
 import { Viewer } from "./viewer.js";
 import { LabelLayer } from "./labels.js";
 import { titleFromWiki, wikiUrl, fetchSummary, fetchRelated, fetchSections, fetchExamine, searchTitles } from "./wiki.js";
-import { ICON_ADD, ICON_REMOVE, ICON_RESET_VIEW, ICON_INFO, ICON_EXTERNAL } from "./icons.js";
+import { ICON_ADD, ICON_REMOVE, ICON_RESET_VIEW, ICON_INFO, ICON_EXTERNAL, ICON_SEARCH, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from "./icons.js";
 import { downloadFile } from "./save.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -27,6 +25,15 @@ const el = {
   panelResizeHandle: $("#panelResizeHandle"),
   tierQuickMenu: $("#tierQuickMenu"),
   status: $("#status"),
+  searchBtn: $("#searchBtn"),
+  searchPanel: $("#searchPanel"),
+  searchInput: $("#searchInput"),
+  searchCount: $("#searchCount"),
+  searchNavRow: $("#searchNavRow"),
+  searchPrevBtn: $("#searchPrevBtn"),
+  searchNextBtn: $("#searchNextBtn"),
+  searchNavLabel: $("#searchNavLabel"),
+  searchResults: $("#searchResults"),
 };
 
 let viewer = null;
@@ -35,9 +42,8 @@ let currentMap = null;
 let wikiToken = 0; // guards against stale async wiki renders
 
 // ---- URL state ------------------------------------------------------------
-// The fragment mirrors map, style, view and selected label, so refreshing or
-// sharing a URL lands back in the same place. Written with replaceState so it
-// never adds history entries.
+// The fragment mirrors map, style, view and selected label. Written with
+// replaceState so it never adds history entries.
 function parseUrlState() {
   const params = new URLSearchParams(location.hash.replace(/^#/, ""));
   const out = {};
@@ -52,8 +58,7 @@ function parseUrlState() {
 }
 
 // Debounced because viewer.onView fires every rendered frame while panning.
-// One-off changes (selecting a label, switching style) call flushUrlUpdate()
-// instead so the address bar doesn't lag behind a click.
+// One-off changes call flushUrlUpdate() instead.
 let urlUpdateTimer = null;
 function scheduleUrlUpdate() {
   clearTimeout(urlUpdateTimer);
@@ -77,8 +82,6 @@ function writeUrlStateNow() {
 }
 
 // ---- map styles -----------------------------------------------------------
-// Every style lives at `${mapCfg.dir}/styles/${id}`, including the one a map
-// opens with (just styles[0]), so none is special-cased here. See config.js.
 let currentStyleId = null;
 let styleMetaCache = {}; // styleId -> meta.json, reset each loadMap()
 
@@ -96,8 +99,6 @@ function setAttribution(html) {
   el.tileAttribution.hidden = !html;
 }
 
-// The reskin a style's `chrome` class applies. Tracked so switching away
-// removes only what the outgoing style added.
 let currentChromeClass = null;
 function applyChrome(styleDef) {
   if (currentChromeClass) document.body.classList.remove(currentChromeClass);
@@ -105,8 +106,6 @@ function applyChrome(styleDef) {
   if (currentChromeClass) document.body.classList.add(currentChromeClass);
 }
 
-// Shows a card for every style except the active one, i.e. what you'd switch
-// to, each with its own thumbnail.
 function renderStylePicker() {
   if (!el.stylePicker) return;
   const opts = currentMap.styles;
@@ -152,9 +151,8 @@ async function switchStyle(styleId) {
   flushUrlUpdate();
 }
 
-// Everything a style changes besides its tiles: credit, chrome class, label
-// size and halo. Shared by switchStyle() and loadMap() so the style a map
-// opens with takes the same path as one you pick.
+// Shared by switchStyle() and loadMap() so the opening style takes the same
+// path as one you pick.
 function applyStyle(styleDef) {
   setAttribution(styleDef.attribution);
   applyChrome(styleDef);
@@ -223,8 +221,6 @@ function renderPanel(label) {
     $("#f-delete").addEventListener("click", () => labels.remove(label));
     $("#f-preview").addEventListener("click", () => renderWiki($("#wikiBox"), label));
     $(".wiki-close").addEventListener("click", () => labels.select(null));
-    // One check when the panel opens, not one per keystroke. wiki.js caches
-    // by title, so re-opening the same unedited label costs nothing further.
     labels.checkWiki(label);
   } else {
     el.panel.classList.remove("author-mode-panel");
@@ -234,8 +230,6 @@ function renderPanel(label) {
   }
 }
 
-// Fills the <datalist> with live title matches, so a typo'd link is caught
-// while typing rather than failing silently until "Preview wiki".
 let wikiSuggestTimer = null;
 function scheduleWikiSuggest(value) {
   clearTimeout(wikiSuggestTimer);
@@ -248,22 +242,112 @@ function scheduleWikiSuggest(value) {
   }, 250);
 }
 
+// ---- label search -----------------------------------------------------------
+let searchMatches = [];
+let searchIndex = -1;
+const SEARCH_RESULTS_CAP = 300; // rendered list only; paging still reaches every match
+
+function normalizeLabelText(name) {
+  return String(name || "").replace(/\n/g, " ");
+}
+
+// Lower is better: 0 exact, 1 the query starts the name, 2 the query starts a
+// later word, 3 it just occurs somewhere. Keeps "Rats"/"Giant Rats" ahead of
+// "Wilderness Crater" for a search of "rat".
+function searchMatchRank(nameLower, q) {
+  if (nameLower === q) return 0;
+  if (nameLower.startsWith(q)) return 1;
+  if (nameLower.includes(" " + q)) return 2;
+  return 3;
+}
+
+function runSearch(query) {
+  const q = query.trim().toLowerCase();
+  searchMatches = !q || !labels
+    ? []
+    : labels.labels
+        .map((l) => ({ l, nameLower: normalizeLabelText(l.name).toLowerCase() }))
+        .filter(({ nameLower }) => nameLower.includes(q))
+        .map(({ l, nameLower }) => ({ l, rank: searchMatchRank(nameLower, q), nameLower }))
+        .sort((a, b) => {
+          if (a.rank !== b.rank) return a.rank - b.rank;
+          const ta = TIER_ORDER.indexOf(a.l.tier), tb = TIER_ORDER.indexOf(b.l.tier);
+          return ta !== tb ? ta - tb : a.nameLower.localeCompare(b.nameLower);
+        })
+        .map(({ l }) => l);
+  searchIndex = searchMatches.length ? 0 : -1;
+  if (searchIndex >= 0) goToSearchResult(searchIndex, false);
+  else renderSearchResults();
+}
+
+function goToSearchResult(i, animate = true) {
+  if (!searchMatches.length) return;
+  searchIndex = (i + searchMatches.length) % searchMatches.length;
+  const label = searchMatches[searchIndex];
+  const tier = LABEL_TIERS[label.tier] || LABEL_TIERS[DEFAULT_TIER];
+  viewer.flyTo(label.x, label.y, tier.searchZoom || 1, animate);
+  labels.select(label); // fires onSelect -> renderPanel + flushUrlUpdate
+  renderSearchResults();
+}
+
+function renderSearchResults() {
+  const q = el.searchInput.value.trim();
+  const n = searchMatches.length;
+  el.searchCount.textContent = q ? `${n ? searchIndex + 1 : 0}/${n}` : "";
+  el.searchNavRow.hidden = n < 2;
+  el.searchPrevBtn.disabled = el.searchNextBtn.disabled = n < 2;
+  el.searchNavLabel.textContent = n ? `${searchIndex + 1} of ${n}` : "";
+
+  if (!q) { el.searchResults.innerHTML = ""; return; }
+  if (!n) { el.searchResults.innerHTML = `<div class="search-empty">No labels match “${escapeHtml(q)}”.</div>`; return; }
+
+  const shown = searchMatches.slice(0, SEARCH_RESULTS_CAP);
+  el.searchResults.innerHTML =
+    shown
+      .map(
+        (l, i) => `
+      <button type="button" class="search-result${i === searchIndex ? " active" : ""}" data-i="${i}">
+        <span class="search-result-name">${escapeHtml(normalizeLabelText(l.name))}</span>
+        <span class="search-result-tier">${escapeHtml((LABEL_TIERS[l.tier] || LABEL_TIERS[DEFAULT_TIER]).label)}</span>
+      </button>`
+      )
+      .join("") +
+    (n > SEARCH_RESULTS_CAP ? `<div class="search-hint">+${n - SEARCH_RESULTS_CAP} more — refine your search.</div>` : "");
+  el.searchResults.querySelectorAll(".search-result").forEach((btn) => {
+    btn.addEventListener("click", () => goToSearchResult(+btn.dataset.i));
+  });
+  const active = el.searchResults.querySelector(".search-result.active");
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+function openSearchPanel() {
+  el.searchPanel.hidden = false;
+  el.searchInput.focus();
+  el.searchInput.select();
+}
+
+function closeSearchPanel() {
+  el.searchPanel.hidden = true;
+}
+
+function resetSearch() {
+  searchMatches = [];
+  searchIndex = -1;
+  if (el.searchInput) el.searchInput.value = "";
+  renderSearchResults();
+}
+
 // ---- wiki sidebar content --------------------------------------------------
-// Shows the wiki article's own title once resolved, not the label's map text,
-// so a label nicknamed "the King's back garden" still heads its panel with the
-// real page name. Author mode skips it: the label text is an editable field
-// directly above, so repeating it would be noise.
+// Shows the wiki article's own title once resolved, not the label's map text.
+// Author mode skips it since the label text is an editable field right above.
 function wikiHeading(title) {
   if (labels.authorMode) return "";
   return `<div class="wiki-title-wrap"><h2 class="wiki-title">${escapeHtml(title)}</h2></div>`;
 }
 
-// True when all four corners of the image are near-transparent, which marks
-// an NPC or item cutout render rather than an opaque scene screenshot. Only
-// cutouts get the extra padding; scenes sit flush.
-// Needs the image loaded with crossorigin="anonymous" so the canvas isn't
-// tainted. Returns false on any failure rather than throwing: this is
-// cosmetic, and the panel shouldn't break over it.
+// True when all four corners are near-transparent: an NPC/item cutout render
+// rather than an opaque scene. Needs crossorigin="anonymous" so the canvas
+// isn't tainted; returns false on any failure since this is purely cosmetic.
 function isCutoutRender(img) {
   try {
     const w = img.naturalWidth, h = img.naturalHeight;
@@ -273,11 +357,7 @@ function isCutoutRender(img) {
     canvas.height = h;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0);
-    // Fixed size, not a fraction of the image. A tight infobox crop can put
-    // real content a few px in from a corner, so scaling the sample up for
-    // bigger images started sampling that content. 6px stayed inside the
-    // transparent margin on every image tested.
-    const s = 6;
+    const s = 6; // fixed size; a tight infobox crop can put content close to a corner
     const corners = [
       [0, 0], [w - s, 0], [0, h - s], [w - s, h - s],
     ];
@@ -285,19 +365,16 @@ function isCutoutRender(img) {
       const data = ctx.getImageData(cx, cy, s, s).data;
       let alphaSum = 0;
       for (let i = 3; i < data.length; i += 4) alphaSum += data[i];
-      return alphaSum / (data.length / 4) < 40; // out of 255, so near-zero
+      return alphaSum / (data.length / 4) < 40;
     });
   } catch (e) {
-    return false; // tainted canvas or other failure
+    return false;
   }
 }
 
 async function renderWiki(box, label) {
   if (!box) return;
   const fallback = String(label.name).replace(/\n/g, " ");
-  // A blank wiki field falls back to the label's own name. Location and NPC
-  // labels are usually named exactly after their page, so it's worth trying
-  // before telling the reader nothing is linked.
   const raw = (label.wiki && label.wiki.trim()) || fallback;
   if (!raw) {
     box.innerHTML =
@@ -340,28 +417,20 @@ async function renderWiki(box, label) {
       `<p class="wiki-license">Content from the <a href="https://runescape.wiki" target="_blank" rel="noopener">RuneScape Wiki</a>, ` +
       `available under <a href="https://creativecommons.org/licenses/by-nc-sa/3.0/" target="_blank" rel="noopener">CC BY-NC-SA 3.0</a>.</p>`;
 
-    // A render is either a full scene, which should sit flush, or a cutout on
-    // a transparent background, which looks cramped bleeding into the rounded
-    // corners. The page doesn't say which, so it's read from the pixels once
-    // the image loads.
     const thumbWrap = box.querySelector("#wikiThumbWrap");
     const thumbImg = thumbWrap && thumbWrap.querySelector("img");
     if (thumbImg) {
       const applyCutoutPadding = () => {
-        if (token !== wikiToken) return; // selection moved on
+        if (token !== wikiToken) return;
         if (isCutoutRender(thumbImg)) thumbWrap.classList.add("cutout");
       };
       if (thumbImg.complete) applyCutoutPadding();
       else thumbImg.addEventListener("load", applyCutoutPadding, { once: true });
     }
 
-    // The infobox examine line: in-game right-click flavour text, often the
-    // best sentence on the page. It isn't in the extract (that's article
-    // prose, not infobox data) so fetchExamine() reads the raw wikitext.
-    // These three extras are garnish on a panel that already shows its
-    // article, so a failed request just leaves its slot empty. Hence the
-    // no-op rejection handlers: without them a dropped connection logs an
-    // unhandled rejection for something nobody would have missed.
+    // Examine, sections and related pages are each their own API call and
+    // garnish on a panel that already shows its article, so a failed request
+    // just leaves its slot empty rather than surfacing an error.
     fetchExamine(s.title).then((examine) => {
       if (token !== wikiToken || !examine) return;
       const el2 = box.querySelector("#wikiExamine");
@@ -369,9 +438,6 @@ async function renderWiki(box, label) {
       el2.outerHTML = `<p class="wiki-examine">“${escapeHtml(examine)}”</p>`;
     }, () => {});
 
-    // Sections and related pages each need their own API call, so they fire in
-    // parallel and fill their own slot as they resolve. Neither blocks the
-    // extract already on screen.
     fetchSections(s.title).then((sections) => {
       if (token !== wikiToken || !sections.length) return;
       const el2 = box.querySelector("#wikiSections");
@@ -431,16 +497,17 @@ function drawCrosshair(ctx, api) {
 }
 
 // ---- map loading -----------------------------------------------------------
-// `restore` re-applies state read from the URL fragment on first load:
-// { view, style, label }, see parseUrlState(). Ordinary map switches omit it.
+// `restore` re-applies state read from the URL fragment on first load; an
+// ordinary map switch omits it.
 async function loadMap(mapCfg, restore = {}) {
-  closeTierQuickMenu(); // a pending add would otherwise reference the outgoing map's world coords
+  closeTierQuickMenu();
+  closeSearchPanel();
+  resetSearch();
   el.status.textContent = "Loading " + mapCfg.label + "…";
   currentMap = mapCfg;
 
-  // Resolve the style to open with BEFORE fetching any tiles, so a shared
-  // "#style=wiki3d" link loads that pyramid directly instead of loading
-  // styles[0]'s first and immediately throwing it away.
+  // Resolve the opening style before fetching any tiles, so a shared
+  // "#style=wiki3d" link loads that pyramid directly.
   const style = (restore.style && styleById(mapCfg, restore.style)) || mapCfg.styles[0];
   currentStyleId = style.id;
   const styleDir = styleDirFor(mapCfg, style.id);
@@ -448,7 +515,7 @@ async function loadMap(mapCfg, restore = {}) {
   styleMetaCache = { [style.id]: meta };
 
   if (viewer) viewer.destroy();
-  labels = null; // the outgoing map's layer must not outlive its viewer
+  labels = null;
   viewer = new Viewer(el.canvas, meta, {
     baseUrl: styleDir,
     home: mapCfg.home,
@@ -479,11 +546,11 @@ async function loadMap(mapCfg, restore = {}) {
     el.canvas.style.cursor = labels.authorMode ? "crosshair" : "grab";
   };
   viewer.onContextMenu = (world, screen, ev) => {
-    if (!labels.authorMode) return; // let the browser's own menu show as normal outside editor mode
+    if (!labels.authorMode) return;
     ev.preventDefault();
     const css = overlayApi().toScreen(world.x, world.y);
     const hit = labels.hitTest(css.x, css.y);
-    if (hit) { labels.select(hit); return; } // right-clicking an existing label just selects it
+    if (hit) { labels.select(hit); return; }
     openTierQuickMenu(world, screen);
   };
   viewer.onHover = (world) => {
@@ -516,16 +583,16 @@ async function loadMap(mapCfg, restore = {}) {
 
   const restoredLabel = restore.label && labels.labels.find((l) => l.id === restore.label);
   if (restoredLabel) {
-    labels.select(restoredLabel); // fires onSelect -> renderPanel + flushUrlUpdate
+    labels.select(restoredLabel);
   } else {
     renderPanel(null);
   }
 
-  dirty = false; // a freshly loaded map has nothing unsaved yet
+  dirty = false;
   updateSaveButton();
   el.status.textContent = `${mapCfg.label}, ${labels.labels.length} labels`;
   viewer.start();
-  flushUrlUpdate(); // normalizes the fragment even if nothing above changed it
+  flushUrlUpdate();
 }
 
 // ---- editor mode + export ---------------------------------------------------
@@ -536,17 +603,13 @@ function setAuthorMode(on) {
   el.canvas.style.cursor = on ? "crosshair" : "grab";
   updateSaveButton();
   // No bulk wiki check on entry: with a few hundred labels that fired a few
-  // hundred concurrent API requests at once. Each label is checked instead
-  // when its own panel opens, see renderPanel().
+  // hundred concurrent requests. Each is checked when its own panel opens.
   if (!on) closeTierQuickMenu();
   renderPanel(labels.selected);
-  viewer.invalidate(); // refreshes the zoom readout + crosshair immediately
+  viewer.invalidate();
 }
 
 // ---- editor mode: right-click "quick add" menu ------------------------------
-// Right-clicking empty map in author mode drops a floating tier picker right
-// at the cursor rather than routing through the side panel. Pick a tier and
-// the label exists immediately, selected, with its name field focused.
 let pendingAddWorld = null;
 
 function tierQuickMenuHtml() {
@@ -565,15 +628,12 @@ function openTierQuickMenu(world, screen) {
   menu.hidden = false;
   menu.querySelectorAll(".tier-quick-item").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const label = labels.add(pendingAddWorld, btn.dataset.tier); // selects it -> renderPanel
+      labels.add(pendingAddWorld, btn.dataset.tier);
       closeTierQuickMenu();
       const nameField = document.getElementById("f-name");
       if (nameField) { nameField.focus(); nameField.select(); }
     });
   });
-  // Positioned after the content/hidden state is set, so offsetWidth/Height
-  // reflect the menu's real size, then clamped so a right-click near an edge
-  // doesn't spawn a menu that spills off screen.
   const pad = 8;
   const x = Math.min(screen.x, window.innerWidth - menu.offsetWidth - pad);
   const y = Math.min(screen.y, window.innerHeight - menu.offsetHeight - pad);
@@ -589,8 +649,6 @@ function closeTierQuickMenu() {
 }
 
 // ---- saving ------------------------------------------------------------------
-// Unsaved-edit tracking. Only meaningful in editor mode, since browsing can't
-// change anything. Drives the Save button's look and the beforeunload guard.
 let dirty = false;
 
 function markDirty() {
@@ -615,21 +673,10 @@ function saveLabels() {
   el.status.textContent = `Downloaded ${count} labels, save over ${currentMap.dir}/${MAP_FILES.labels}`;
 }
 
-// ---- init ------------------------------------------------------------------
 // ---- panel resize --------------------------------------------------------
-// Drag the handle to widen the panel. Useful on larger screens where 320px
-// leaves the extract wrapping awkwardly. Persisted in localStorage. --panel-w
-// is the single source of truth, so dragging only updates one variable.
 const PANEL_W_KEY = "rsmap-panel-width";
 const PANEL_MIN_W = 280;
 function panelMaxW() {
-  // Leaves at least 160px of map/controls visible regardless of how wide
-  // wide the panel gets, but never reports a maximum below the minimum.
-  // Without that floor the clamp in setPanelWidth() inverts on a narrow
-  // viewport and returns a width under PANEL_MIN_W, or a negative one below
-  // 160px wide, which then feeds every position derived from --panel-w.
-  // Under ~440px the panel is a full-width sheet anyway, so this costs
-  // nothing real.
   return Math.max(PANEL_MIN_W, Math.min(640, window.innerWidth - 160));
 }
 function setPanelWidth(w) {
@@ -637,17 +684,10 @@ function setPanelWidth(w) {
   document.documentElement.style.setProperty("--panel-w", clamped + "px");
   return clamped;
 }
-// Only the panel's width needs JS. Its height, and the handle's, is pure CSS.
-// See the .panel and .panel-body split in style.css.
 function initPanelResize() {
   const handle = el.panelResizeHandle;
   if (!handle) return;
 
-  // The width you last chose, independent of what currently fits. Clamping is
-  // applied on the way out to the CSS variable, never folded back into this.
-  // Otherwise narrowing the window would permanently shrink the preference,
-  // and widening it again would leave the panel stuck at whatever the
-  // narrowest moment allowed.
   let preferredW = parseInt(localStorage.getItem(PANEL_W_KEY), 10);
   if (!isFinite(preferredW)) preferredW = el.panel.getBoundingClientRect().width;
   setPanelWidth(preferredW);
@@ -666,8 +706,7 @@ function initPanelResize() {
   });
   handle.addEventListener("pointermove", (e) => {
     if (!dragging) return;
-    // The panel is right-anchored, so dragging the handle left (negative
-    // clientX movement) should grow it, not shrink it.
+    // Panel is right-anchored, so dragging left grows it.
     preferredW = setPanelWidth(startW + (startX - e.clientX));
   });
   const endDrag = () => {
@@ -679,22 +718,17 @@ function initPanelResize() {
   handle.addEventListener("pointerup", endDrag);
   handle.addEventListener("pointercancel", endDrag);
 
-  // Re-clamp the *preference* against the new viewport: a width that was fine
-  // on a wide window could otherwise leave no map visible on a narrow one, and
-  // widening the window again restores the panel to the size you actually
-  // asked for.
   window.addEventListener("resize", () => setPanelWidth(preferredW));
 }
 
 function initUi(initialMapId) {
-  // Icons injected here rather than baked into index.html so the markup
-  // stays free of duplicated path data. The buttons start empty in the HTML,
-  // with only their aria-label and title, so there's no flash of a stale
-  // glyph before this runs.
   el.zoomIn.innerHTML = ICON_ADD;
   el.zoomOut.innerHTML = ICON_REMOVE;
   el.reset.innerHTML = ICON_RESET_VIEW;
   el.infoBtn.innerHTML = ICON_INFO;
+  el.searchBtn.innerHTML = ICON_SEARCH;
+  el.searchPrevBtn.innerHTML = ICON_CHEVRON_LEFT;
+  el.searchNextBtn.innerHTML = ICON_CHEVRON_RIGHT;
   const disclaimerCta = $(".disclaimer-cta");
   if (disclaimerCta) disclaimerCta.insertAdjacentHTML("beforeend", " " + ICON_EXTERNAL);
 
@@ -702,12 +736,10 @@ function initUi(initialMapId) {
   if (initialMapId) el.mapSelect.value = initialMapId;
   el.mapSelect.addEventListener("change", () => {
     const m = MAPS.find((x) => x.id === el.mapSelect.value);
-    openMap(m); // a manual map switch always starts that map at its own home view
+    openMap(m);
   });
   el.exportBtn.addEventListener("click", saveLabels);
   updateSaveButton();
-  // Editor work only lives in memory until saved, so leaving with unsaved
-  // label edits should cost a confirmation rather than the edits.
   window.addEventListener("beforeunload", (e) => {
     if (!dirty) return;
     e.preventDefault();
@@ -718,12 +750,10 @@ function initUi(initialMapId) {
   el.reset.addEventListener("click", () => viewer.resetView());
 
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeTierQuickMenu(); return; }
+    if (e.key === "Escape") { closeTierQuickMenu(); closeSearchPanel(); return; }
 
-    // Ctrl/Cmd+S skips the "not while typing" guard below on purpose:
-    // finishing a label's name and saving without leaving the field first is
-    // the most common way to save. Outside editor mode it isn't claimed, so
-    // the browser's own Save Page still works.
+    // Skips the "not while typing" guard below on purpose: finishing a
+    // label's name and saving without leaving the field first is common.
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") {
       if (!labels || !labels.authorMode) return;
       e.preventDefault();
@@ -734,20 +764,20 @@ function initUi(initialMapId) {
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
-    // Editor mode has no visible button, only this shortcut and a line in the
-    // info popover. Shift+E with no other modifiers: Ctrl and Alt combos
-    // collide with OS and GPU vendor hotkeys (AMD's overlay took
-    // Ctrl+Shift+E), while a bare letter would fire on a stray keypress.
     if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "e") {
       e.preventDefault();
       setAuthorMode(!labels.authorMode);
     }
+
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key === "/") {
+      e.preventDefault();
+      openSearchPanel();
+    }
   });
 
-  // On narrow screens the panel is a sheet over a dimmed backdrop, and the
-  // backdrop is a pseudo element on the frame itself. Pseudo elements forward
-  // hits to their host, so a tap outside the sheet arrives here with the frame
-  // as target, while taps on the content hit #panelBody and are ignored.
+  // On narrow screens the panel is a sheet whose backdrop is a pseudo element
+  // on the frame; a tap outside the sheet arrives here with the frame as
+  // target, while taps on the content hit #panelBody and are ignored.
   el.panel.addEventListener("click", (e) => {
     if (e.target === el.panel && labels) labels.select(null);
   });
@@ -756,9 +786,31 @@ function initUi(initialMapId) {
     e.stopPropagation();
     el.infoPanel.hidden = !el.infoPanel.hidden;
   });
+  el.searchBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (el.searchPanel.hidden) openSearchPanel();
+    else closeSearchPanel();
+  });
+  el.searchInput.addEventListener("click", (e) => e.stopPropagation());
+  el.searchInput.addEventListener("input", (e) => runSearch(e.target.value));
+  el.searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      goToSearchResult(searchIndex + (e.shiftKey ? -1 : 1));
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeSearchPanel();
+      el.searchInput.blur();
+    }
+  });
+  el.searchPrevBtn.addEventListener("click", () => goToSearchResult(searchIndex - 1));
+  el.searchNextBtn.addEventListener("click", () => goToSearchResult(searchIndex + 1));
   document.addEventListener("click", (e) => {
     if (!el.infoPanel.hidden && !el.infoPanel.contains(e.target) && e.target !== el.infoBtn) {
       el.infoPanel.hidden = true;
+    }
+    if (!el.searchPanel.hidden && !el.searchPanel.contains(e.target) && e.target !== el.searchBtn) {
+      closeSearchPanel();
     }
     if (!el.tierQuickMenu.hidden && !el.tierQuickMenu.contains(e.target)) {
       closeTierQuickMenu();
@@ -768,9 +820,6 @@ function initUi(initialMapId) {
   initPanelResize();
 }
 
-// loadMap() awaits several fetches; if any of them fails (a missing meta.json,
-// an offline first load) the failure has to land somewhere visible, or the app
-// just shows an empty canvas and says nothing.
 function openMap(mapCfg, restore) {
   return loadMap(mapCfg, restore).catch((err) => {
     console.error(err);

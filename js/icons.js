@@ -21,3 +21,10 @@ export const ICON_INFO = icon(
 );
 // external link (call_made_24dp), used after outbound wiki and game links
 export const ICON_EXTERNAL = icon("m216-160-56-56 464-464H360v-80h400v400h-80v-264L216-160Z");
+// search (search_24dp)
+export const ICON_SEARCH = icon(
+  "M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"
+);
+// chevron left/right (search result paging)
+export const ICON_CHEVRON_LEFT = icon("M560-240 320-480l240-240 56 56-184 184 184 184-56 56Z");
+export const ICON_CHEVRON_RIGHT = icon("M504-480 320-664l56-56 240 240-240 240-56-56 184-184Z");

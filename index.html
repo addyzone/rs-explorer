@@ -2,9 +2,6 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <!-- No user-scalable=no. #map sets touch-action: none, so the canvas already
-       takes the pinch gesture itself (see viewer.js). Blocking page zoom on top
-       of that only stopped people magnifying the wiki text. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>RS Wiki Explorer Map</title>
   <meta name="description" content="A hand-labelled map of Gielinor, from the landmarks every player knows to the quiet corners you only find by wandering. Every label links to its RuneScape Wiki article." />
@@ -14,25 +11,32 @@
   <meta property="og:description" content="A hand-labelled map of Gielinor. Every label links to its RuneScape Wiki article." />
   <meta property="og:image" content="maps/surface/styles/original/thumb.jpg" />
   <meta name="twitter:card" content="summary_large_image" />
-  <!-- World map emoji (U+1F5FA), centred on a 100 unit square. Sizing it in a
-       16px box left it sitting on its baseline and clipped at some tab sizes. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20x='50'%20y='54'%20font-size='88'%20text-anchor='middle'%20dominant-baseline='central'%3E%F0%9F%97%BA%EF%B8%8F%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <canvas id="map"></canvas>
 
-  <!-- Top left: style picker. Its own control rather than an entry in a menu,
-       since switching style changes the whole map's look. -->
   <div id="stylePicker" class="style-picker" hidden></div>
 
-  <!-- Top right: map switcher, then editor badge and save (author mode only),
-       then info. The app name lives in the info panel, not here. -->
   <div class="controls-topright">
     <select id="mapSelect" class="map-select" title="Change map" aria-label="Change map"></select>
+    <div class="search-wrap">
+      <button id="searchBtn" class="icon-btn" title="Search labels" aria-label="Search labels"></button>
+      <div id="searchPanel" class="search-panel" hidden>
+        <div class="search-box">
+          <input id="searchInput" type="text" class="search-input" placeholder="Search labels…" autocomplete="off" aria-label="Search labels" />
+          <span id="searchCount" class="search-count"></span>
+        </div>
+        <div id="searchNavRow" class="search-nav-row" hidden>
+          <button id="searchPrevBtn" class="search-nav-btn" title="Previous match (Shift+Enter)" aria-label="Previous match"></button>
+          <span id="searchNavLabel" class="search-nav-label"></span>
+          <button id="searchNextBtn" class="search-nav-btn" title="Next match (Enter)" aria-label="Next match"></button>
+        </div>
+        <div id="searchResults" class="search-results"></div>
+      </div>
+    </div>
     <span class="editor-badge">✎ Editor mode</span>
-    <!-- Label set by updateSaveButton(): depends on whether this browser can
-         write to the map folder, and whether anything is unsaved. -->
     <button id="exportBtn" class="pill-btn" hidden>Save</button>
     <div class="info-wrap">
       <button id="infoBtn" class="icon-btn" title="About & shortcuts" aria-label="About & shortcuts"></button>
@@ -46,28 +50,26 @@
         <div class="info-rows">
           <div class="info-row"><span class="info-keys">Drag</span><span>Pan the map</span></div>
           <div class="info-row"><span class="info-keys">Scroll / pinch</span><span>Zoom in and out</span></div>
+          <div class="info-row"><span class="info-keys"><kbd>/</kbd></span><span>Search labels</span></div>
           <div class="info-row"><span class="info-keys"><kbd>Shift</kbd>+<kbd>E</kbd></span><span>Toggle editor mode</span></div>
           <div class="info-row editor-only"><span class="info-keys">Right-click</span><span>Add a label here</span></div>
           <div class="info-row editor-only"><span class="info-keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>Save labels</span></div>
         </div>
-        <a class="info-contact" href="mailto:webmaster@addy.zone?subject=RS%20Explorer%20Map">Contact Creator</a>
+        <p class="info-legal">
+          Created using intellectual property belonging to Jagex Limited under
+          the terms of Jagex's Fan Content Policy. <strong>This content is not
+          endorsed by or affiliated with Jagex.</strong>
+        </p>
+        <a class="info-contact" href="mailto:webmaster@addy.zone?subject=RS%20Explorer%20Map">Email Webmaster</a>
       </div>
     </div>
   </div>
 
-  <!-- Side panel: wiki article, or the label editor in author mode.
-       #panel is the frame and the positioning context; #panelBody is the only
-       part that scrolls and the only part whose contents get replaced. That
-       split lets the resize handle be a child spanning top:0 to bottom:0, so
-       it matches the panel's height with no JS measuring anything.
-       On narrow screens the frame becomes a sheet over the map instead, and
-       hides entirely when nothing is selected. See the 640px media query. -->
   <aside id="panel" class="panel empty">
     <div id="panelBody" class="panel-body"></div>
     <div id="panelResizeHandle" class="panel-resize-handle" title="Drag to resize"><span></span></div>
   </aside>
 
-  <!-- Zoom and view controls, grouped as one card -->
   <div class="controls">
     <div id="zoomReadout" class="zoom-readout"></div>
     <div class="zoom-group">
@@ -77,27 +79,17 @@
     <button id="resetView" class="ctl ctl-reset" title="Reset view" aria-label="Reset view"></button>
   </div>
 
-  <!-- Bottom left, flush to the corner: the required fan content notice, in
-       the plain text style most map tools use for attribution rather than as
-       another floating card. Hidden in editor mode. -->
   <div class="disclaimer-bar">
-    <!-- Notice and outbound link share a line. The per-style tile credit is a
-         separate statement about a different party, so CSS gives it its own
-         line below. Ordered this way so the separator can't strand itself at
-         the start of line two. -->
     <span>Created using intellectual property belonging to Jagex Limited under the terms of Jagex's Fan Content Policy. <strong>This content is not endorsed by or affiliated with Jagex.</strong>
     · <a class="disclaimer-cta" href="https://www.runescape.com/" target="_blank" rel="noopener">Play RuneScape</a></span>
     <span id="tileAttribution" class="disclaimer-attribution" hidden></span>
   </div>
 
-  <!-- Editor HUD: cursor coords and status. Hidden outside author mode. -->
   <div class="hud">
     <span id="coords" class="hud-coords">–, –</span>
     <span id="status" class="hud-status"></span>
   </div>
 
-  <!-- Editor quick add menu. Right-click empty map in author mode to drop a
-       label there. Positioned at the click point by main.js. -->
   <div id="tierQuickMenu" class="tier-quick-menu" hidden></div>
 
   <script type="module" src="js/main.js"></script>
