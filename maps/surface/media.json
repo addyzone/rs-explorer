@@ -1,4 +1,8 @@
 {
   "map": "surface",
-  "media": []
+  "media": [
+    {"id":"media-1","file":"Town sign.png","x":10120,"y":7654,"pinnedAt":"2026-08-05T01:34:48Z"},
+    {"id":"media-2","file":"Draynor onion field.png","x":10091,"y":7904,"pinnedAt":"2026-01-25T22:02:06Z"},
+    {"id":"media-3","file":"Draynor island.png","x":9992,"y":8019,"pinnedAt":"2026-08-05T01:51:14Z"}
+  ]
 }
