@@ -1,8 +1,9 @@
 import { MAPS, MAP_FILES, LABEL_TIERS, TIER_ORDER, DEFAULT_TIER } from "./config.js";
 import { Viewer } from "./viewer.js";
 import { LabelLayer } from "./labels.js";
-import { titleFromWiki, wikiUrl, fetchSummary, fetchRelated, fetchSections, fetchExamine, searchTitles } from "./wiki.js";
-import { ICON_ADD, ICON_REMOVE, ICON_RESET_VIEW, ICON_INFO, ICON_EXTERNAL, ICON_SEARCH, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from "./icons.js";
+import { MediaLayer } from "./media.js";
+import { titleFromWiki, wikiUrl, fetchSummary, fetchRelated, fetchSections, fetchExamine, searchTitles, searchFileTitles, fetchFileInfo } from "./wiki.js";
+import { ICON_ADD, ICON_REMOVE, ICON_RESET_VIEW, ICON_INFO, ICON_EXTERNAL, ICON_SEARCH, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT, ICON_CLOSE } from "./icons.js";
 import { downloadFile } from "./save.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -18,6 +19,10 @@ const el = {
   zoomIn: $("#zoomIn"),
   zoomOut: $("#zoomOut"),
   reset: $("#resetView"),
+  oculusBtn: $("#oculusBtn"),
+  oculusGhost: $("#oculusGhost"),
+  mediaPopup: $("#mediaPopup"),
+  mediaModal: $("#mediaModal"),
   coords: $("#coords"),
   zoomReadout: $("#zoomReadout"),
   panel: $("#panel"),
@@ -38,6 +43,7 @@ const el = {
 
 let viewer = null;
 let labels = null;
+let media = null;
 let currentMap = null;
 let wikiToken = 0; // guards against stale async wiki renders
 
@@ -188,7 +194,7 @@ function renderPanel(label) {
     el.panel.classList.add("empty");
     el.panelBody.innerHTML = labels && labels.authorMode
       ? `<div class="panel-hint">Editor mode. Right-click the map to drop a label, or click one to edit it. <span class="fld-hint">(Shift+E to exit)</span></div>`
-      : `<div class="panel-hint">Click a label to read about it. Zoom in to reveal more.</div>`;
+      : `<div class="panel-hint">Click a label to read about it. Zoom in to reveal more details.</div>`;
     return;
   }
   el.panel.classList.remove("empty");
@@ -196,7 +202,7 @@ function renderPanel(label) {
   if (labels.authorMode) {
     el.panel.classList.add("author-mode-panel");
     el.panelBody.innerHTML = `
-      <button class="wiki-close" title="Close">×</button>
+      <button class="wiki-close" title="Close">${ICON_CLOSE}</button>
       <label class="fld">Label text <span class="fld-hint">(Enter for a new line)</span>
         <textarea id="f-name" rows="2">${escapeHtml(label.name)}</textarea>
       </label>
@@ -227,7 +233,7 @@ function renderPanel(label) {
     labels.checkWiki(label);
   } else {
     el.panel.classList.remove("author-mode-panel");
-    el.panelBody.innerHTML = `<button class="wiki-close" title="Close">×</button><div id="wikiBox" class="wiki-box"></div>`;
+    el.panelBody.innerHTML = `<button class="wiki-close" title="Close">${ICON_CLOSE}</button><div id="wikiBox" class="wiki-box"></div>`;
     $(".wiki-close").addEventListener("click", () => labels.select(null));
     renderWiki($("#wikiBox"), label);
   }
@@ -243,6 +249,142 @@ function scheduleWikiSuggest(value) {
     if (!list) return; // panel moved on before this resolved
     list.innerHTML = matches.map((m) => `<option value="${escapeAttr(m)}">`).join("");
   }, 250);
+}
+
+// ---- media popup (author mode only) ------------------------------------------
+// A small floating card for editing one media point: filename field, a
+// thumbnail preview, delete. Deliberately separate from the label side panel
+// since media has no wiki article, no tier, no URL state — it's just a point
+// with a linked file. Regular viewing (click, or drop the orb on a marker)
+// goes to the full-screen viewer below instead.
+let mediaPopupItem = null;
+let mediaSuggestTimer = null;
+
+function closeMediaPopup() {
+  mediaPopupItem = null;
+  el.mediaPopup.hidden = true;
+  el.mediaPopup.innerHTML = "";
+  // Otherwise the marker stays forced fully visible at any zoom forever,
+  // since MediaLayer.draw() keeps a selected item lit past its own fade.
+  if (media) media.select(null);
+}
+
+function openMediaPopup(item, screen) {
+  mediaPopupItem = item;
+  media.select(item);
+  el.mediaPopup.hidden = false;
+  renderMediaPopup();
+  positionFloating(el.mediaPopup, screen);
+}
+
+function renderMediaPopup() {
+  const item = mediaPopupItem;
+  if (!item) return;
+  el.mediaPopup.innerHTML = `
+    <button class="wiki-close" title="Close">${ICON_CLOSE}</button>
+    <label class="fld">Wiki file name
+      <input id="m-file" type="text" placeholder="e.g. Varrock square.png" value="${escapeAttr(item.file || "")}" list="mediaSuggest" autocomplete="off">
+      <datalist id="mediaSuggest"></datalist>
+    </label>
+    <div id="mediaPreview" class="media-preview"></div>
+    <div class="row"><button id="m-delete" class="btn danger">Delete</button></div>`;
+  const fileField = $("#m-file");
+  fileField.addEventListener("input", (e) => {
+    media.update(item, { file: e.target.value });
+    scheduleMediaSuggest(e.target.value);
+    loadMediaPreview(item, { pin: true });
+  });
+  $("#m-delete").addEventListener("click", () => { media.remove(item); closeMediaPopup(); });
+  $(".wiki-close").addEventListener("click", closeMediaPopup);
+  loadMediaPreview(item);
+}
+
+function scheduleMediaSuggest(value) {
+  clearTimeout(mediaSuggestTimer);
+  mediaSuggestTimer = setTimeout(async () => {
+    const matches = await searchFileTitles(value);
+    const list = $("#mediaSuggest");
+    if (!list) return; // popup moved on before this resolved
+    list.innerHTML = matches.map((m) => `<option value="${escapeAttr(m)}">`).join("");
+  }, 250);
+}
+
+// Small thumbnail in the edit popup; click opens the same full-screen
+// viewer as a regular visitor gets, so an editor can check a screenshot at
+// full size without leaving edit mode.
+//
+// `pin: true` (only from the filename field's own input handler, i.e. an
+// active edit) resolves whatever's live right now and locks the item to
+// that exact revision via pinnedAt, so a later re-upload over the same
+// wiki filename can't silently change this point's image. Just opening the
+// popup to look at an already-set filename must NOT re-pin — it resolves
+// the existing pinnedAt (or shows the current version if the point predates
+// this feature and has none).
+async function loadMediaPreview(item, { pin = false } = {}) {
+  const box = document.getElementById("mediaPreview");
+  if (!box) return;
+  const file = (item.file || "").trim();
+  if (!file) {
+    box.innerHTML = `<div class="wiki-empty">No file linked yet.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="wiki-loading">Loading…</div>`;
+  const info = pin ? await fetchFileInfo(file) : await fetchFileInfo(file, item.pinnedAt);
+  if (mediaPopupItem !== item) return; // popup moved on
+  if (!info) {
+    box.innerHTML = `<div class="wiki-empty">Couldn't find “${escapeHtml(file)}” on the wiki.</div>`;
+    return;
+  }
+  if (pin && info.timestamp && info.timestamp !== item.pinnedAt) {
+    media.update(item, { pinnedAt: info.timestamp });
+  }
+  box.innerHTML = `<button type="button" class="media-thumb-btn"><img src="${escapeAttr(info.thumb)}" alt="" loading="lazy"></button>`;
+  box.querySelector(".media-thumb-btn").addEventListener("click", () => openMediaViewer(item));
+}
+
+// ---- media viewer: full-screen lightbox --------------------------------------
+// Opened by a plain click on a marker, or by dropping the dragged orb on one
+// (see the oculusBtn handler in initUi()). Shows the file at its native
+// resolution (capped only by the viewport, never upscaled — see .media-modal
+// img in style.css), since these are meant to be read as real screenshots
+// rather than map decoration.
+let mediaModalToken = 0;
+
+function renderMediaModal(inner) {
+  el.mediaModal.innerHTML = `<button class="media-modal-close" title="Close">${ICON_CLOSE}</button>` + inner;
+  el.mediaModal.querySelector(".media-modal-close").addEventListener("click", closeMediaViewer);
+}
+
+async function openMediaViewer(item) {
+  closeMediaPopup();
+  el.mediaModal.hidden = false;
+  const token = ++mediaModalToken;
+  renderMediaModal(`<div class="media-modal-msg">Loading…</div>`);
+  const file = (item.file || "").trim();
+  if (!file) {
+    renderMediaModal(`<div class="media-modal-msg">No image linked yet.</div>`);
+    return;
+  }
+  const info = await fetchFileInfo(file, item.pinnedAt);
+  if (token !== mediaModalToken) return; // viewer moved on or closed
+  if (!info) {
+    renderMediaModal(`<div class="media-modal-msg">Couldn't find “${escapeHtml(file)}” on the wiki.</div>`);
+    return;
+  }
+  renderMediaModal(
+    `<img src="${escapeAttr(info.full)}" alt="">` +
+    `<div class="media-modal-footer">` +
+    `<a class="media-modal-link" href="${escapeAttr(info.pageUrl)}" target="_blank" rel="noopener">Open on RuneScape Wiki ${ICON_EXTERNAL}</a>` +
+    `<p class="media-modal-attribution">Loaded live from the <a href="https://runescape.wiki" target="_blank" rel="noopener">RuneScape Wiki</a>. ` +
+    `Game screenshot, used under Jagex's Fan Content Policy.</p>` +
+    `</div>`
+  );
+}
+
+function closeMediaViewer() {
+  mediaModalToken++; // invalidate any in-flight fetch
+  el.mediaModal.hidden = true;
+  el.mediaModal.innerHTML = "";
 }
 
 // ---- label search -----------------------------------------------------------
@@ -519,6 +661,7 @@ async function loadMap(mapCfg, restore = {}) {
 
   if (viewer) viewer.destroy();
   labels = null;
+  media = null;
   viewer = new Viewer(el.canvas, meta, {
     baseUrl: styleDir,
     home: mapCfg.home,
@@ -528,6 +671,7 @@ async function loadMap(mapCfg, restore = {}) {
   renderStylePicker();
 
   labels = new LabelLayer(viewer);
+  media = new MediaLayer(viewer);
   applyStyle(style);
   labels.onSelect = (label) => { renderPanel(label); flushUrlUpdate(); };
   labels.onChange = () => {
@@ -537,15 +681,33 @@ async function loadMap(mapCfg, restore = {}) {
       coordEl.textContent = `📍 ${labels.selected.x}, ${labels.selected.y}`;
     }
   };
+  media.onChange = () => { markDirty(); updateOculusVisibility(); };
 
   viewer.onOverlay = (ctx, api) => {
     if (!labels) return;
     labels.draw(ctx, api);
+    if (media) media.draw(ctx, api);
     if (labels.authorMode && viewer.mouse.over) drawCrosshair(ctx, api);
   };
   viewer.onClick = (world) => {
     const css = overlayApi().toScreen(world.x, world.y);
-    labels.handleClick(world, css);
+    const labelHit = labels.hitTest(css.x, css.y);
+    if (labelHit) {
+      closeMediaPopup();
+      labels.select(labelHit);
+      el.canvas.style.cursor = labels.authorMode ? "move" : "pointer";
+      return;
+    }
+    const mediaHit = media.hitTest(css.x, css.y);
+    if (mediaHit) {
+      labels.select(null);
+      if (labels.authorMode) openMediaPopup(mediaHit, css);
+      else openMediaViewer(mediaHit);
+      return;
+    }
+    closeMediaPopup();
+    media.select(null);
+    labels.select(null);
     el.canvas.style.cursor = labels.authorMode ? "crosshair" : "grab";
   };
   viewer.onContextMenu = (world, screen, ev) => {
@@ -560,8 +722,11 @@ async function loadMap(mapCfg, restore = {}) {
     el.coords.textContent = `${Math.round(world.x)}, ${Math.round(world.y)}`;
     const css = overlayApi().toScreen(world.x, world.y);
     const hit = labels.handleHover(css.x, css.y);
+    const mediaHit = media.handleHover(css.x, css.y);
     el.canvas.style.cursor = hit
       ? (labels.authorMode ? "move" : "pointer")
+      : mediaHit
+      ? "pointer"
       : labels.authorMode ? "crosshair" : "grab";
   };
   viewer.onDragStart = (world) => {
@@ -583,6 +748,15 @@ async function loadMap(mapCfg, restore = {}) {
   } catch (e) {
     labels.load([]);
   }
+
+  try {
+    const data = await loadJson(`${mapCfg.dir}/${MAP_FILES.media}`, { revalidate: true });
+    media.load(data.media || []);
+  } catch (e) {
+    media.load([]);
+  }
+  closeMediaPopup();
+  updateOculusVisibility();
 
   const restoredLabel = restore.label && labels.labels.find((l) => l.id === restore.label);
   if (restoredLabel) {
@@ -608,8 +782,17 @@ function setAuthorMode(on) {
   // No bulk wiki check on entry: with a few hundred labels that fired a few
   // hundred concurrent requests. Each is checked when its own panel opens.
   if (!on) closeTierQuickMenu();
+  closeMediaPopup(); // author/viewer mode render different popup content
   renderPanel(labels.selected);
   viewer.invalidate();
+}
+
+// ---- media: orb of oculus reveal gesture -------------------------------------
+// Hides the button entirely on a map with no media points yet, so it's not
+// clutter until the editor has actually placed one.
+function updateOculusVisibility() {
+  if (!el.oculusBtn) return;
+  el.oculusBtn.hidden = !media || media.items.length === 0;
 }
 
 // ---- editor mode: right-click "quick add" menu ------------------------------
@@ -621,7 +804,22 @@ function tierQuickMenuHtml() {
     <button type="button" class="tier-quick-item" data-tier="${k}">
       <span class="tier-quick-swatch" style="background:${LABEL_TIERS[k].color}"></span>${LABEL_TIERS[k].label}
     </button>`
-  ).join("");
+  ).join("") +
+    `<div class="tier-quick-sep"></div>
+    <button type="button" class="tier-quick-item" data-media="1">
+      <span class="tier-quick-swatch tier-quick-media-dot"></span>Add media
+    </button>`;
+}
+
+// Clamps a floating panel (already sized) so it stays on-screen from a
+// point near where the triggering click happened. Shared by the tier quick
+// menu and the media popup.
+function positionFloating(panel, screen) {
+  const pad = 8;
+  const x = Math.min(screen.x, window.innerWidth - panel.offsetWidth - pad);
+  const y = Math.min(screen.y, window.innerHeight - panel.offsetHeight - pad);
+  panel.style.left = Math.max(pad, x) + "px";
+  panel.style.top = Math.max(pad, y) + "px";
 }
 
 function openTierQuickMenu(world, screen) {
@@ -629,7 +827,7 @@ function openTierQuickMenu(world, screen) {
   const menu = el.tierQuickMenu;
   menu.innerHTML = tierQuickMenuHtml();
   menu.hidden = false;
-  menu.querySelectorAll(".tier-quick-item").forEach((btn) => {
+  menu.querySelectorAll(".tier-quick-item[data-tier]").forEach((btn) => {
     btn.addEventListener("click", () => {
       labels.add(pendingAddWorld, btn.dataset.tier);
       closeTierQuickMenu();
@@ -637,11 +835,15 @@ function openTierQuickMenu(world, screen) {
       if (nameField) { nameField.focus(); nameField.select(); }
     });
   });
-  const pad = 8;
-  const x = Math.min(screen.x, window.innerWidth - menu.offsetWidth - pad);
-  const y = Math.min(screen.y, window.innerHeight - menu.offsetHeight - pad);
-  menu.style.left = Math.max(pad, x) + "px";
-  menu.style.top = Math.max(pad, y) + "px";
+  const mediaBtn = menu.querySelector(".tier-quick-item[data-media]");
+  if (mediaBtn) {
+    mediaBtn.addEventListener("click", () => {
+      const item = media.add(pendingAddWorld);
+      closeTierQuickMenu();
+      openMediaPopup(item, overlayApi().toScreen(item.x, item.y));
+    });
+  }
+  positionFloating(menu, screen);
 }
 
 function closeTierQuickMenu() {
@@ -668,12 +870,16 @@ function updateSaveButton() {
 }
 
 function saveLabels() {
-  const json = labels.exportJson(currentMap.id);
+  downloadFile(MAP_FILES.labels, labels.exportJson(currentMap.id));
+  downloadFile(MAP_FILES.media, media.exportJson(currentMap.id));
   const count = labels.labels.length;
-  downloadFile(MAP_FILES.labels, json);
+  const mediaCount = media.items.length;
   dirty = false;
   updateSaveButton();
-  el.status.textContent = `Downloaded ${count} labels, save over ${currentMap.dir}/${MAP_FILES.labels}`;
+  el.status.textContent =
+    `Downloaded ${count} labels` +
+    (mediaCount ? ` + ${mediaCount} media` : "") +
+    `, save over ${currentMap.dir}/`;
 }
 
 // ---- panel resize --------------------------------------------------------
@@ -752,8 +958,51 @@ function initUi(initialMapId) {
   el.zoomOut.addEventListener("click", () => viewer.stepZoom(-1));
   el.reset.addEventListener("click", () => viewer.resetView());
 
+  // Drag-and-hold: picking the orb up (its own icon fades to an empty
+  // socket) hands off to a free-floating ghost that tracks the pointer
+  // everywhere on screen, like Google Maps' pegman. Media spots glow for as
+  // long as it's held, wherever it's dragged. Dropping it (pointerup) right
+  // on a lit marker opens that screenshot; dropping anywhere else, or
+  // aborting the gesture (pointercancel), just snaps it back with no side
+  // effect.
+  el.oculusBtn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    if (!media) return;
+    media.setRevealing(true);
+    el.oculusBtn.classList.add("active");
+    const ghost = el.oculusGhost;
+    ghost.hidden = false;
+    const place = (x, y) => { ghost.style.transform = `translate(${x - 23}px, ${y - 23}px)`; };
+    place(e.clientX, e.clientY);
+    const move = (ev) => place(ev.clientX, ev.clientY);
+    const cleanup = () => {
+      media.setRevealing(false);
+      el.oculusBtn.classList.remove("active");
+      ghost.hidden = true;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", drop);
+      window.removeEventListener("pointercancel", cleanup);
+    };
+    const drop = (ev) => {
+      cleanup();
+      // Fuzzy: landing the drop exactly on a small dot is fiddly, so this
+      // snaps to the nearest marker within reach rather than requiring a
+      // pixel-perfect hit.
+      const hit = media.hitTestNear(ev.clientX, ev.clientY);
+      if (hit) openMediaViewer(hit);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", drop);
+    window.addEventListener("pointercancel", cleanup);
+  });
+
+  // Clicking the dimmed backdrop (not the image itself) closes the viewer.
+  el.mediaModal.addEventListener("click", (e) => {
+    if (e.target === el.mediaModal) closeMediaViewer();
+  });
+
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeTierQuickMenu(); closeSearchPanel(); return; }
+    if (e.key === "Escape") { closeTierQuickMenu(); closeSearchPanel(); closeMediaPopup(); closeMediaViewer(); return; }
 
     // Skips the "not while typing" guard below on purpose: finishing a
     // label's name and saving without leaving the field first is common.

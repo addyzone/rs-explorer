@@ -72,11 +72,23 @@
 
   <div class="controls">
     <div id="zoomReadout" class="zoom-readout"></div>
+    <button id="oculusBtn" class="oculus-btn" title="Drag to reveal media" aria-label="Drag to reveal media" hidden>
+      <span class="oculus-tip">Drag me!</span>
+      <img src="https://runescape.wiki/images/thumb/Orb_of_oculus_detail.png/80px-Orb_of_oculus_detail.png?53586" alt="" draggable="false">
+    </button>
     <div class="zoom-group">
       <button id="zoomIn" class="ctl" title="Zoom in" aria-label="Zoom in"></button>
       <button id="zoomOut" class="ctl" title="Zoom out" aria-label="Zoom out"></button>
     </div>
     <button id="resetView" class="ctl ctl-reset" title="Reset view" aria-label="Reset view"></button>
+  </div>
+
+  <div id="mediaPopup" class="media-popup" hidden></div>
+
+  <div id="mediaModal" class="media-modal" hidden></div>
+
+  <div id="oculusGhost" class="oculus-ghost" hidden>
+    <img src="https://runescape.wiki/images/thumb/Orb_of_oculus_detail.png/80px-Orb_of_oculus_detail.png?53586" alt="" draggable="false">
   </div>
 
   <div class="disclaimer-bar">

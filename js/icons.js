@@ -28,3 +28,5 @@ export const ICON_SEARCH = icon(
 // chevron left/right (search result paging)
 export const ICON_CHEVRON_LEFT = icon("M560-240 320-480l240-240 56 56-184 184 184 184-56 56Z");
 export const ICON_CHEVRON_RIGHT = icon("M504-480 320-664l56-56 240 240-240 240-56-56 184-184Z");
+// close (close_24dp)
+export const ICON_CLOSE = icon("m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z");

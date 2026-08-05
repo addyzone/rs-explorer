@@ -458,16 +458,45 @@ export class LabelLayer {
     return hit;
   }
 
+  // Turns a label's name into a URL-friendly slug: lowercased, accents
+  // stripped, anything that isn't a-z0-9 collapsed to a single hyphen.
+  // Falls back to "label" for a name that's all punctuation/empty.
+  _slugify(name) {
+    const base = String(name || "")
+      .replace(/\n/g, " ")
+      .normalize("NFKD")
+      .replace(/[̀-ͯ]/g, "")
+      .toLowerCase()
+      .replace(/'/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return base || "label";
+  }
+
   // One label per line rather than pretty-printed, so a finished map's
   // labels.json stays greppable and a moved label is a single changed line.
   // `wiki` is omitted when blank or when it just repeats `name`.
+  //
+  // Ids are (re)derived from each label's name on every export, rather than
+  // kept as opaque "label-N" ids, so the URL fragment for a shared label
+  // reads like #label=varrock instead of #label=label-42. A name collision
+  // gets a numeric suffix (-2, -3, ...) in label order. Assigned back onto
+  // the live labels (and this._ids) so the running session's ids match what
+  // just got saved.
   exportJson(mapId) {
+    const used = new Set();
     const lines = this.labels.map((l) => {
-      const out = { id: l.id, name: l.name, tier: l.tier, x: l.x, y: l.y };
+      const base = this._slugify(l.name);
+      let id = base;
+      for (let n = 2; used.has(id); n++) id = `${base}-${n}`;
+      used.add(id);
+      l.id = id;
+      const out = { id, name: l.name, tier: l.tier, x: l.x, y: l.y };
       const wiki = (l.wiki || "").trim();
       if (wiki && wiki !== String(l.name || "").replace(/\n/g, " ").trim()) out.wiki = wiki;
       return "    " + JSON.stringify(out);
     });
+    this._ids = used;
     return `{\n  "map": ${JSON.stringify(mapId)},\n  "labels": [\n${lines.join(",\n")}\n  ]\n}\n`;
   }
 }

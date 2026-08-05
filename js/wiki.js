@@ -137,6 +137,83 @@ export async function searchTitles(prefix, limit = 8) {
   return (data && data[1]) || [];
 }
 
+// Same as searchTitles but restricted to the File: namespace, for the media
+// editor's filename autocomplete. Returned titles have "File:" stripped since
+// the editor field stores bare filenames.
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+
+export async function searchFileTitles(prefix, limit = 8) {
+  const q = String(prefix || "").trim();
+  if (q.length < 2) return [];
+  const params = new URLSearchParams({
+    action: "opensearch",
+    format: "json",
+    search: q,
+    // Over-fetch since the File namespace also holds audio (.ogg) that gets
+    // filtered out below; asking for just `limit` up front would often
+    // leave fewer than `limit` images once those are dropped.
+    limit: String(limit * 3),
+    namespace: "6",
+    redirects: "resolve",
+    origin: "*",
+  });
+  const res = await fetch(`${API}?${params}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  const titles = (data && data[1]) || [];
+  return titles
+    .map((t) => t.replace(/^File:/i, ""))
+    .filter((t) => IMAGE_EXT.test(t))
+    .slice(0, limit);
+}
+
+const fileInfoCache = new Map();
+
+// Resolves a wiki media filename to its hotlinkable image URLs via the
+// imageinfo API, so media.js never has to guess at MediaWiki's thumb path
+// scheme. `file` is the bare filename (no "File:" prefix).
+//
+// `pinnedAt` locks resolution to the file revision current as of that ISO
+// timestamp (via imageinfo's iistart, which walks history newest-first from
+// a given point) instead of whatever's live now — otherwise a re-upload
+// over the same filename on the wiki would silently change a media point's
+// image out from under a saved map. Omit it to resolve the current version,
+// which is also how a caller discovers the timestamp to pin to in the first
+// place (see the returned `timestamp`).
+export async function fetchFileInfo(file, pinnedAt) {
+  const name = String(file || "").trim();
+  if (!name) return null;
+  const title = "File:" + name.replace(/^File:/i, "");
+  const cacheKey = title + "|" + (pinnedAt || "");
+  if (fileInfoCache.has(cacheKey)) return fileInfoCache.get(cacheKey);
+  const params = new URLSearchParams({
+    action: "query",
+    format: "json",
+    formatversion: "2",
+    titles: title,
+    prop: "imageinfo",
+    iiprop: "url|timestamp",
+    iiurlwidth: String(THUMB_SIZE),
+    origin: "*",
+  });
+  if (pinnedAt) {
+    params.set("iistart", pinnedAt);
+    params.set("iilimit", "1");
+  }
+  let out = null;
+  try {
+    const res = await fetch(`${API}?${params}`);
+    if (res.ok) {
+      const data = await res.json();
+      const page = data && data.query && data.query.pages && data.query.pages[0];
+      const info = page && !page.missing && page.imageinfo && page.imageinfo[0];
+      if (info) out = { thumb: info.thumburl || info.url, full: info.url, pageUrl: wikiUrl(title), timestamp: info.timestamp };
+    }
+  } catch (e) { /* network hiccup, treat as unresolved */ }
+  fileInfoCache.set(cacheKey, out);
+  return out;
+}
+
 // Not a full wikitext parser, just enough for a short single-line infobox field.
 function stripWikitext(s) {
   return s
