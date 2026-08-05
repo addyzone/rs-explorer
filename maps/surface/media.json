@@ -1,8 +1,14 @@
 {
   "map": "surface",
   "media": [
-    {"id":"media-1","file":"Town sign.png","x":10120,"y":7654,"pinnedAt":"2026-08-05T01:34:48Z"},
+    {"id":"media-1","file":"Town sign.png","x":10120,"y":7653,"pinnedAt":"2026-08-05T01:34:48Z"},
     {"id":"media-2","file":"Draynor onion field.png","x":10091,"y":7904,"pinnedAt":"2026-01-25T22:02:06Z"},
-    {"id":"media-3","file":"Draynor island.png","x":9992,"y":8019,"pinnedAt":"2026-08-05T01:51:14Z"}
+    {"id":"media-3","file":"Draynor island.png","x":9992,"y":8019,"pinnedAt":"2026-08-05T01:51:14Z"},
+    {"id":"media-4","file":"H.A.M._hideout.png","x":10348,"y":7870,"pinnedAt":"2026-01-30T16:35:18Z"},
+    {"id":"media-5","file":"Goblin house.png","x":10707,"y":7936,"pinnedAt":"2026-02-03T16:17:44Z"},
+    {"id":"media-6","file":"Draynor dock.png","x":9987,"y":7891,"pinnedAt":"2026-01-25T21:55:12Z"},
+    {"id":"media-7","file":"DraynorWillowTrees.png","x":10013,"y":7910,"pinnedAt":"2026-01-25T22:05:16Z"},
+    {"id":"media-8","file":"Grain_Field.png","x":10124,"y":7792,"pinnedAt":"2026-01-25T22:09:34Z"},
+    {"id":"media-9","file":"Port_Sarim_ships.png","x":9941,"y":8069,"pinnedAt":"2026-01-23T20:34:39Z"}
   ]
 }
