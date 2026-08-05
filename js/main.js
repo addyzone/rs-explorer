@@ -375,8 +375,7 @@ async function openMediaViewer(item) {
     `<img src="${escapeAttr(info.full)}" alt="">` +
     `<div class="media-modal-footer">` +
     `<a class="media-modal-link" href="${escapeAttr(info.pageUrl)}" target="_blank" rel="noopener">Open on RuneScape Wiki ${ICON_EXTERNAL}</a>` +
-    `<p class="media-modal-attribution">Loaded live from the <a href="https://runescape.wiki" target="_blank" rel="noopener">RuneScape Wiki</a>. ` +
-    `Game screenshot, used under Jagex's Fan Content Policy.</p>` +
+    `<p class="media-modal-attribution">Loaded live from the <a href="https://runescape.wiki" target="_blank" rel="noopener">RuneScape Wiki</a>.</p>` +
     `</div>`
   );
 }
@@ -731,10 +730,10 @@ async function loadMap(mapCfg, restore = {}) {
   };
   viewer.onDragStart = (world) => {
     const css = overlayApi().toScreen(world.x, world.y);
-    return labels.beginDrag(world, css);
+    return labels.beginDrag(world, css) || media.beginDrag(world, css);
   };
-  viewer.onDragMove = (world) => labels.dragTo(world);
-  viewer.onDragEnd = () => labels.endDrag();
+  viewer.onDragMove = (world) => { labels.dragTo(world); media.dragTo(world); };
+  viewer.onDragEnd = () => { labels.endDrag(); media.endDrag(); };
   viewer.onView = (v) => {
     const nativePct = Math.round((v.scale / v.dpr) * 100);
     const tileLevel = labels.authorMode ? `  (z${v.chooseZoom()})` : "";
@@ -775,6 +774,7 @@ async function loadMap(mapCfg, restore = {}) {
 // ---- editor mode + export ---------------------------------------------------
 function setAuthorMode(on) {
   labels.authorMode = on;
+  media.authorMode = on;
   document.body.classList.toggle("editor-mode", on);
   el.exportBtn.hidden = !on;
   el.canvas.style.cursor = on ? "crosshair" : "grab";

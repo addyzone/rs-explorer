@@ -12,7 +12,7 @@ const MIN_SCALE = 0.85; // matches LABEL_TIERS.feature in config.js
 const FADE_BAND = 1.7;  // matches LabelLayer's default fadeBand
 // [scale, radius] CSS px, ascending — interpolated and clamped at the ends,
 // same shape as config.js's sizeSteps but for a dot instead of a font size.
-const SIZE_STEPS = [[0.85, 2.5], [1, 2.5], [2, 3.5], [5, 4.5], [6, 5], [7, 5.5], [8, 6.25]];
+const SIZE_STEPS = [[0.85, 4.5], [1, 4.5], [2, 5.5], [5, 6.5], [6, 7], [7, 7.5], [8, 8.25]];
 const REVEAL_RADIUS = 5; // fixed CSS px while revealing, ignores zoom entirely
 
 const FILL_DIM = "rgba(154, 162, 171, 0.14)";     // feature tier grey, faint middle
@@ -47,10 +47,13 @@ export class MediaLayer {
     this.selected = null;
     this.hovered = null;
     this.revealing = false;
+    this.authorMode = false; // kept in sync with LabelLayer.authorMode by main.js
     this.nextId = 1;
     this._ids = new Set();
     this.onChange = null; // () => void
     this._drawn = []; // [{item, x0,y0,x1,y1}] in CSS px
+    this._dragItem = null;
+    this._dragOffset = { x: 0, y: 0 };
   }
 
   load(list) {
@@ -184,6 +187,30 @@ export class MediaLayer {
       this.viewer.invalidate();
     }
     return hit;
+  }
+
+  // Same "already selected only" gesture as LabelLayer.beginDrag: opening a
+  // marker's edit popup selects it, and only then does a drag on the canvas
+  // grab it, so panning near a marker can't move it by accident.
+  beginDrag(world, css) {
+    if (!this.authorMode) return false;
+    const hit = this.hitTest(css.x, css.y);
+    if (!hit || hit !== this.selected) return false;
+    this._dragItem = hit;
+    this._dragOffset = { x: hit.x - world.x, y: hit.y - world.y };
+    return true;
+  }
+
+  dragTo(world) {
+    if (!this._dragItem) return;
+    this.update(this._dragItem, {
+      x: Math.round(world.x + this._dragOffset.x),
+      y: Math.round(world.y + this._dragOffset.y),
+    });
+  }
+
+  endDrag() {
+    this._dragItem = null;
   }
 
   // `pinnedAt` (set by main.js when a filename resolves in the editor) is
