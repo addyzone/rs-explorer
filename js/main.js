@@ -2,7 +2,7 @@ import { MAPS, MAP_FILES, LABEL_TIERS, TIER_ORDER, DEFAULT_TIER } from "./config
 import { Viewer } from "./viewer.js";
 import { LabelLayer } from "./labels.js";
 import { MediaLayer } from "./media.js";
-import { titleFromWiki, wikiUrl, fetchSummary, fetchRelated, fetchSections, fetchExamine, searchTitles, searchFileTitles, fetchFileInfo } from "./wiki.js";
+import { titleFromWiki, wikiUrl, fetchSummary, fetchRelated, fetchSections, fetchExamine, fetchInfobox, searchTitles, searchFileTitles, fetchFileInfo } from "./wiki.js";
 import { ICON_ADD, ICON_REMOVE, ICON_RESET_VIEW, ICON_INFO, ICON_EXTERNAL, ICON_SEARCH, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT, ICON_CLOSE } from "./icons.js";
 import { downloadFile } from "./save.js";
 
@@ -541,6 +541,7 @@ async function renderWiki(box, label) {
     }
     const extract = s.extract.length > 700 ? s.extract.slice(0, 700) + "…" : s.extract;
     box.innerHTML =
+      `<div id="wikiCombat"></div>` +
       wikiHeading(s.title) +
       `<div id="wikiExamine"></div>` +
       (s.thumb
@@ -548,6 +549,7 @@ async function renderWiki(box, label) {
         : "") +
       `<p class="wiki-extract">${escapeHtml(extract)}</p>` +
       `<a class="wiki-link" href="${escapeAttr(s.url)}" target="_blank" rel="noopener">Open on RuneScape Wiki ${ICON_EXTERNAL}</a>` +
+      `<div id="wikiRelease"></div>` +
       `<div id="wikiSections"></div>` +
       (s.categories && s.categories.length
         ? `<div class="wiki-cats">
@@ -580,6 +582,21 @@ async function renderWiki(box, label) {
       const el2 = box.querySelector("#wikiExamine");
       if (!el2) return;
       el2.outerHTML = `<p class="wiki-examine">“${escapeHtml(examine)}”</p>`;
+    }, () => {});
+
+    fetchInfobox(s.title).then((info) => {
+      if (token !== wikiToken || !info) return;
+      const combatEl = box.querySelector("#wikiCombat");
+      if (info.combat && combatEl) {
+        combatEl.outerHTML =
+          `<div class="wiki-combat"><img src="https://runescape.wiki/images/Combat_swords.png?f0186" alt=""><span>${escapeHtml(info.combat)}</span></div>`;
+      }
+      // Just a bit of trivia, so it's tucked below the main article content
+      // rather than competing with the combat badge for top billing.
+      const releaseEl = box.querySelector("#wikiRelease");
+      if (info.release && releaseEl) {
+        releaseEl.outerHTML = `<p class="wiki-release">Released ${escapeHtml(info.release)}</p>`;
+      }
     }, () => {});
 
     fetchSections(s.title).then((sections) => {

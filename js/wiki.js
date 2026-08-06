@@ -254,3 +254,86 @@ export async function fetchExamine(title) {
   examineCache.set(title, out);
   return out;
 }
+
+const infoboxCache = new Map();
+
+// Finds the page's first top-level {{...}} template whose name starts with
+// "Infobox", walking brace depth by hand rather than a regex — a plain
+// regex can't balance nesting, and infobox fields routinely nest another
+// template (e.g. a release date wrapped in {{Date|...}}).
+function extractInfoboxBlock(wikitext) {
+  const m = /\{\{\s*infobox/i.exec(wikitext);
+  if (!m) return null;
+  let depth = 0, i = m.index;
+  for (; i < wikitext.length; i++) {
+    if (wikitext.startsWith("{{", i)) { depth++; i++; }
+    else if (wikitext.startsWith("}}", i)) { depth--; i++; if (depth === 0) break; }
+  }
+  return wikitext.slice(m.index, i);
+}
+
+// A monster/NPC with several forms (different combat levels, etc.) isn't
+// multiple infobox templates on this wiki — it's one infobox with the field
+// numbered per version (level1/level2/..., or plain `level` when every
+// version shares it, as most do). This pulls every numbered-or-not
+// occurrence of `field`, deduplicated.
+function infoboxFieldValues(block, field) {
+  const re = new RegExp(`^\\s*\\|\\s*${field}\\d*\\s*=\\s*(.+)$`, "gim");
+  const values = [];
+  let m;
+  while ((m = re.exec(block))) {
+    const v = stripWikitext(m[1].trim());
+    if (v) values.push(v);
+  }
+  return [...new Set(values)];
+}
+
+// Numeric variants collapse to a "lo–hi" range once there's more than one
+// (a monster with several combat-level forms); anything non-numeric just
+// lists as-is.
+function summarizeCombat(values) {
+  if (!values.length) return null;
+  if (values.length === 1) return values[0];
+  const nums = values.map(Number);
+  if (nums.every((n) => !Number.isNaN(n))) {
+    const lo = Math.min(...nums), hi = Math.max(...nums);
+    return lo === hi ? String(lo) : `${lo}–${hi}`;
+  }
+  return values.join(", ");
+}
+
+// Combat level and release date, read straight from the article's own
+// infobox (fields `level`/`release` per Infobox Monster/NPC). A monster
+// with several combat-level forms folds them into one "lo–hi" range rather
+// than picking a form arbitrarily; release just takes the first (original)
+// version's date. One fetch covers both, so main.js's separate combat-badge
+// and release-line spots share this instead of hitting the API twice.
+export async function fetchInfobox(title) {
+  if (infoboxCache.has(title)) return infoboxCache.get(title);
+  const params = new URLSearchParams({
+    action: "parse",
+    format: "json",
+    formatversion: "2",
+    page: title,
+    prop: "wikitext",
+    section: "0",
+    origin: "*",
+  });
+  let out = null;
+  try {
+    const res = await fetch(`${API}?${params}`);
+    if (res.ok) {
+      const data = await res.json();
+      const wikitext = data && data.parse && data.parse.wikitext;
+      const block = wikitext && extractInfoboxBlock(wikitext);
+      if (block) {
+        const combat = summarizeCombat(infoboxFieldValues(block, "level"));
+        const releaseValues = infoboxFieldValues(block, "release");
+        const release = releaseValues.length ? releaseValues[0] : null;
+        if (combat || release) out = { combat, release };
+      }
+    }
+  } catch (e) { /* network hiccup, treat as no infobox data */ }
+  infoboxCache.set(title, out);
+  return out;
+}

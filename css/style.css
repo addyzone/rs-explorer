@@ -466,6 +466,25 @@ body.style-wiki3d .wiki-close:hover { background: rgba(54, 65, 79, 0.08); }
 
 .wiki-title-wrap { padding-right: 22px; margin-bottom: 12px; }
 .wiki-title { margin: 0; font-size: 19px; line-height: 1.25; color: var(--ink); }
+/* Combat level, read from the article's own infobox. Floated rather than
+   its own row: sits right of the name/examine text instead of pushing them
+   down, and clears the close button's top-right corner with margin-top. */
+.wiki-combat {
+  float: right;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 20px 0 10px 12px;
+  padding: 4px 10px 4px 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--panel-brd);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.wiki-combat img { width: 16px; height: 16px; object-fit: contain; flex: none; }
+body.style-wiki3d .wiki-combat { background: rgba(54, 65, 79, 0.06); }
 .wiki-examine { margin: -8px 0 12px; font-style: italic; font-size: 12.5px; line-height: 1.4; color: var(--ink-dim); }
 
 /* height:auto + a cap shows most infobox images at their natural aspect
@@ -497,6 +516,9 @@ body.style-wiki3d .wiki-extract { color: var(--ink); }
 }
 .wiki-link:hover { filter: brightness(1.08); }
 body.style-wiki3d .wiki-link { color: #ffffff; background: var(--accent); }
+/* Release date: just trivia, tucked under the main wiki link rather than
+   given top billing next to the title like the combat badge. */
+.wiki-release { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-dim); }
 .wiki-loading, .wiki-empty { font-size: 13px; color: var(--ink-dim); }
 .wiki-empty a { color: var(--accent); }
 .wiki-license { font-size: 10.5px; line-height: 1.5; color: var(--ink-dim); opacity: 0.75; margin: 14px 0 0; }

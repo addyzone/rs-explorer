@@ -12,7 +12,7 @@ const MIN_SCALE = 0.85; // matches LABEL_TIERS.feature in config.js
 const FADE_BAND = 1.7;  // matches LabelLayer's default fadeBand
 // [scale, radius] CSS px, ascending — interpolated and clamped at the ends,
 // same shape as config.js's sizeSteps but for a dot instead of a font size.
-const SIZE_STEPS = [[0.85, 4.5], [1, 4.5], [2, 5.5], [5, 6.5], [6, 7], [7, 7.5], [8, 8.25]];
+const SIZE_STEPS = [[0.85, 4.5], [1, 4.5], [2, 5.5], [5, 6.5], [6, 7], [7, 8.25], [8, 9.5]];
 const REVEAL_RADIUS = 5; // fixed CSS px while revealing, ignores zoom entirely
 
 const FILL_DIM = "rgba(154, 162, 171, 0.14)";     // feature tier grey, faint middle
