@@ -204,7 +204,10 @@ function renderPanel(label) {
     el.panelBody.innerHTML = `
       <button class="wiki-close" title="Close">${ICON_CLOSE}</button>
       <label class="fld">Label text <span class="fld-hint">(Enter for a new line)</span>
-        <textarea id="f-name" rows="2">${escapeHtml(label.name)}</textarea>
+        <div class="name-suggest-wrap">
+          <textarea id="f-name" rows="2">${escapeHtml(label.name)}</textarea>
+          <div id="nameSuggest" class="name-suggest"></div>
+        </div>
       </label>
       <label class="fld">Tier
         <select id="f-tier">${tierOptions(label.tier)}</select>
@@ -219,7 +222,10 @@ function renderPanel(label) {
         <button id="f-delete" class="btn danger">Delete</button>
       </div>
       <div id="wikiBox" class="wiki-box"></div>`;
-    $("#f-name").addEventListener("input", (e) => labels.update(label, { name: e.target.value }));
+    $("#f-name").addEventListener("input", (e) => {
+      labels.update(label, { name: e.target.value });
+      scheduleNameSuggest(label, e.target.value);
+    });
     $("#f-name").addEventListener("blur", () => labels.checkWiki(label));
     $("#f-tier").addEventListener("change", (e) => labels.update(label, { tier: e.target.value }));
     $("#f-wiki").addEventListener("input", (e) => {
@@ -249,6 +255,47 @@ function scheduleWikiSuggest(value) {
     if (!list) return; // panel moved on before this resolved
     list.innerHTML = matches.map((m) => `<option value="${escapeAttr(m)}">`).join("");
   }, 250);
+}
+
+// Same idea as scheduleWikiSuggest, but for the Label text field: that's a
+// <textarea> (multi-line names need it), and the list="" datalist attribute
+// only works on <input>, so it gets its own dropdown built from plain
+// buttons instead. Picking one fills the Wiki field directly — the point is
+// skipping a redundant retype when the label's own name already matches a
+// wiki title.
+let nameSuggestTimer = null;
+function scheduleNameSuggest(label, value) {
+  clearTimeout(nameSuggestTimer);
+  const list = $("#nameSuggest");
+  if (!list) return;
+  if (!value.trim()) { hideNameSuggest(); return; }
+  nameSuggestTimer = setTimeout(async () => {
+    const title = titleFromWiki(value.replace(/\n/g, " "));
+    const matches = await searchTitles(title);
+    const list2 = $("#nameSuggest"); // panel may have moved on
+    if (!list2) return;
+    if (!matches.length) { hideNameSuggest(); return; }
+    list2.innerHTML = matches
+      .map((m) => `<button type="button" class="name-suggest-item">${escapeHtml(m)}</button>`)
+      .join("");
+    list2.classList.add("show");
+    list2.querySelectorAll(".name-suggest-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        labels.update(label, { wiki: btn.textContent });
+        const wikiField = $("#f-wiki");
+        if (wikiField) wikiField.value = btn.textContent;
+        labels.checkWiki(label);
+        hideNameSuggest();
+      });
+    });
+  }, 250);
+}
+
+function hideNameSuggest() {
+  const list = $("#nameSuggest");
+  if (!list) return;
+  list.classList.remove("show");
+  list.innerHTML = "";
 }
 
 // ---- media popup (author mode only) ------------------------------------------
@@ -1019,7 +1066,7 @@ function initUi(initialMapId) {
   });
 
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeTierQuickMenu(); closeSearchPanel(); closeMediaPopup(); closeMediaViewer(); return; }
+    if (e.key === "Escape") { closeTierQuickMenu(); closeSearchPanel(); closeMediaPopup(); closeMediaViewer(); hideNameSuggest(); return; }
 
     // Skips the "not while typing" guard below on purpose: finishing a
     // label's name and saving without leaving the field first is common.
@@ -1083,6 +1130,11 @@ function initUi(initialMapId) {
     }
     if (!el.tierQuickMenu.hidden && !el.tierQuickMenu.contains(e.target)) {
       closeTierQuickMenu();
+    }
+    const nameSuggest = document.getElementById("nameSuggest");
+    if (nameSuggest && nameSuggest.classList.contains("show") &&
+        !nameSuggest.contains(e.target) && e.target.id !== "f-name") {
+      hideNameSuggest();
     }
   });
 

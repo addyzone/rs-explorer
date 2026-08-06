@@ -572,6 +572,39 @@ body.style-wiki3d .wiki-chip { background: rgba(54, 65, 79, 0.05); }
   font-family: inherit;
   resize: vertical;
 }
+/* Label text's suggestion dropdown: <textarea> can't use list="" (that only
+   works on <input>), so this is a plain floating list of buttons instead of
+   a native datalist — same matches as the Wiki field's, just its own UI. */
+.name-suggest-wrap { position: relative; }
+.name-suggest {
+  display: none;
+  position: absolute;
+  left: 0; right: 0; top: 100%;
+  margin-top: 4px;
+  background: var(--panel);
+  border: 1px solid var(--panel-brd);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+  z-index: 5;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.name-suggest.show { display: block; }
+.name-suggest-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.name-suggest-item:hover { background: rgba(255, 255, 255, 0.08); }
+body.style-wiki3d .name-suggest-item:hover { background: rgba(54, 65, 79, 0.08); }
 .row { display: flex; gap: 8px; }
 .row .btn {
   background: var(--panel);
