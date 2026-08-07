@@ -1,8 +1,8 @@
 {
   "map": "surface",
   "labels": [
-    {"id":"lunar-isle","name":"Lunar Isle","tier":"region","x":6232,"y":5337},
-    {"id":"fremennik-isles","name":"Fremennik Isles","tier":"region","x":7149,"y":5338},
+    {"id":"lunar-isle","name":"Lunar Isle","tier":"region","x":6154,"y":5225},
+    {"id":"fremennik-isles","name":"Fremennik Isles","tier":"region","x":7153,"y":5456},
     {"id":"lumbridge","name":"Lumbridge","tier":"major","x":10604,"y":7909},
     {"id":"lumbridge-swamp","name":"Lumbridge Swamp","tier":"minor","x":10452,"y":8125},
     {"id":"cemetery","name":"Cemetery","tier":"landmark","x":10646,"y":8058,"wiki":"Lumbridge cemetery"},
@@ -19,7 +19,7 @@
     {"id":"yanille","name":"Yanille","tier":"major","x":7985,"y":8467},
     {"id":"castle-wars","name":"Castle Wars","tier":"minor","x":7279,"y":8362},
     {"id":"soul-wars","name":"Soul Wars","tier":"major","x":6514,"y":9037},
-    {"id":"prifdinnas","name":"Prifdinnas","tier":"major","x":6555,"y":7403},
+    {"id":"prifdinnas","name":"Prifdinnas","tier":"major","x":6515,"y":7388},
     {"id":"tirannwn","name":"Tirannwn","tier":"region","x":6652,"y":7960},
     {"id":"isafdar","name":"Isafdar","tier":"major","x":6642,"y":8116},
     {"id":"mos-leharmless","name":"Mos Le'Harmless","tier":"major","x":12662,"y":8725},
@@ -103,7 +103,7 @@
     {"id":"warforge-dig-site","name":"Warforge\nDig Site","tier":"major","x":7282,"y":9511},
     {"id":"anachronia","name":"Anachronia","tier":"region","x":13548,"y":3794},
     {"id":"miscellania","name":"Miscellania","tier":"region","x":7851,"y":5334},
-    {"id":"ungael","name":"Ungael","tier":"region","x":7018,"y":4590},
+    {"id":"ungael","name":"Ungael","tier":"region","x":7066,"y":4682},
     {"id":"trollheim","name":"Trollheim","tier":"major","x":9225,"y":6140},
     {"id":"troll-stronghold","name":"Troll\nStronghold","tier":"minor","x":9014,"y":6127},
     {"id":"mountain-camp","name":"Mountain\nCamp","tier":"minor","x":8815,"y":6168},
@@ -695,7 +695,7 @@
     {"id":"sorcerers-tower","name":"Sorcerer's Tower","tier":"minor","x":8490,"y":7213},
     {"id":"thormac","name":"Thormac","tier":"npc","x":8496,"y":7223},
     {"id":"legends-guild-south-west-mine","name":"Legends' Guild\nsouth-west mine","tier":"feature","x":8487,"y":7505},
-    {"id":"rimmington","name":"Rimmington","tier":"major","x":9507,"y":7976},
+    {"id":"rimmington","name":"Rimmington","tier":"major","x":9508,"y":7975},
     {"id":"house-portal","name":"House portal","tier":"landmark","x":9433,"y":7939},
     {"id":"housing-wizard","name":"Housing wizard","tier":"npc","x":9437,"y":7928},
     {"id":"furniture-workbench","name":"Furniture\nworkbench","tier":"landmark","x":9452,"y":7914},
@@ -923,6 +923,7 @@
     {"id":"neitiznot","name":"Neitiznot","tier":"major","x":6946,"y":5570},
     {"id":"falconer","name":"Falconer","tier":"minor","x":7183,"y":6420},
     {"id":"memorial-to-guthix","name":"Memorial to Guthix","tier":"minor","x":6770,"y":6603},
-    {"id":"hall-of-memories","name":"Hall of Memories","tier":"landmark","x":6770,"y":6634}
+    {"id":"hall-of-memories","name":"Hall of Memories","tier":"landmark","x":6770,"y":6634},
+    {"id":"rock-island-prison","name":"Rock Island\nPrison","tier":"minor","x":9821,"y":8916}
   ]
 }
